@@ -10,12 +10,13 @@ services:
       - "30113:30113"
     environment:
       PORT: "30113"
-      OCTOPRINT_SNAPSHOT_URL: "http://<OCTOPRINT_IP>:<OCTOPRINT_PORT>/webcam/?action=snapshot"
-      DEFAULT_WIDTH: "480"
-      DEFAULT_HEIGHT: "270"
-      JPEG_QUALITY: "75"
-      CACHE_MS: "500"
-      REQUEST_TIMEOUT: "5"
+      #OCTOPRINT_SNAPSHOT_URL: "http://<OCTOPRINT_IP>:<OCTOPRINT_PORT>/webcam/?action=snapshot"
+      #DEFAULT_WIDTH: "480"
+      #DEFAULT_HEIGHT: "270"
+      #JPEG_QUALITY: "75"
+      #CACHE_MS: "500"
+      #REQUEST_TIMEOUT: "5"
     volumes:
       - /octoprint-snapshot-ESP32-ByMiuC/app:/app:ro
+      - /octoprint-snapshot-ESP32-ByMiuC/app/config.py:/app/config.py:rw
     restart: unless-stopped
