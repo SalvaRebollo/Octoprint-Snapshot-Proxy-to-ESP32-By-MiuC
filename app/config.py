@@ -1,8 +1,8 @@
-# Configuration file - DO NOT COMMIT TO GITHUB
+# Configuration file - DO NOT COMMIT YOUR HOSTNAME OR PORT TO GITHUB
 # Copy config.example.py to config.py and adjust values
 
 # Flask server port
-PORT = 30113
+PORT = <OCTOPRINT_PORT>
 
 # OctoPrint snapshot URL
 OCTOPRINT_SNAPSHOT_URL = "http://<OCTOPRINT_IP>:<OCTOPRINT_PORT>/webcam/?action=snapshot"
