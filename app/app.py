@@ -309,8 +309,8 @@ def index():
             <button onclick="moveUp()">↑ Arriba</button>
             <button onclick="moveRight()">Derecha →</button>
 
-            <button onclick="moveDown()">↓ Abajo</button>
             <button class="primary" onclick="updateImage()">Actualizar</button>
+            <button onclick="moveDown()">↓ Abajo</button>
             <button class="shortcut" onclick="shortcutNozzle()">Shortcut 2.6x</button>
           </div>
 
