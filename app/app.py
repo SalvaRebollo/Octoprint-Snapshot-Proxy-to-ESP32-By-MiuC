@@ -53,8 +53,8 @@ def load_runtime_config():
         exec(compile(config_path.read_text(encoding="utf-8"), config_path, "exec"), values)
 
         OCTOPRINT_SNAPSHOT_URL = str(values["OCTOPRINT_SNAPSHOT_URL"])
-        DEFAULT_WIDTH = clamp(int(values["DEFAULT_WIDTH"]), 80, 1280)
-        DEFAULT_HEIGHT = clamp(int(values["DEFAULT_HEIGHT"]), 80, 720)
+        DEFAULT_WIDTH = clamp(int(values["DEFAULT_WIDTH"]), 80, 10000)
+        DEFAULT_HEIGHT = clamp(int(values["DEFAULT_HEIGHT"]), 80, 10000)
         JPEG_QUALITY = clamp(int(values["JPEG_QUALITY"]), 30, 95)
         CACHE_MS = max(0, int(values["CACHE_MS"]))
         REQUEST_TIMEOUT = max(0.1, float(values["REQUEST_TIMEOUT"]))
@@ -381,11 +381,12 @@ def index():
                 <option value="640x360">640 × 360</option>
                 <option value="800x480">800 × 480</option>
                 <option value="1280x720">1280 × 720</option>
+                <option value="1920x1080">1920 × 1080</option>
                 <option value="custom">Personalizada</option>
               </select>
               <div class="custom-resolution" id="customResolution">
-                <input id="customWidth" type="number" min="80" max="1280" value="__DEFAULT_WIDTH__" aria-label="Ancho">
-                <input id="customHeight" type="number" min="80" max="720" value="__DEFAULT_HEIGHT__" aria-label="Alto">
+                <input id="customWidth" type="number" min="80" max="10000" value="__DEFAULT_WIDTH__" aria-label="Ancho">
+                <input id="customHeight" type="number" min="80" max="10000" value="__DEFAULT_HEIGHT__" aria-label="Alto">
                 <button onclick="applyCustomResolution()">Aplicar</button>
               </div>
             </div>
@@ -434,13 +435,13 @@ def index():
               <tbody>
                 <tr>
                   <td><code>w</code></td>
-                  <td>80 - 1280</td>
+                  <td>80 - 10000</td>
                   <td>__DEFAULT_WIDTH__</td>
                   <td>Ancho de la imagen en píxeles</td>
                 </tr>
                 <tr>
                   <td><code>h</code></td>
-                  <td>80 - 720</td>
+                  <td>80 - 10000</td>
                   <td>__DEFAULT_HEIGHT__</td>
                   <td>Alto de la imagen en píxeles</td>
                 </tr>
@@ -739,10 +740,10 @@ def set_resolution():
         width = int(data.get("width"))
         height = int(data.get("height"))
 
-        if not 80 <= width <= 1280:
-            raise ValueError("El ancho debe estar entre 80 y 1280")
-        if not 80 <= height <= 720:
-            raise ValueError("El alto debe estar entre 80 y 720")
+        if not 80 <= width <= 10000:
+            raise ValueError("El ancho debe estar entre 80 y 10000")
+        if not 80 <= height <= 10000:
+            raise ValueError("El alto debe estar entre 80 y 10000")
 
         save_resolution_to_config(width, height)
         return {"status": "ok", "width": width, "height": height}
@@ -771,8 +772,8 @@ def snapshot_lite():
     cx = float(request.args.get("x", "0.5"))
     cy = float(request.args.get("y", "0.5"))
 
-    width = clamp(width, 80, 1280)
-    height = clamp(height, 80, 720)
+    width = clamp(width, 80, 10000)
+    height = clamp(height, 80, 10000)
     quality = clamp(quality, 30, 95)
     zoom = clamp(zoom, 1.0, 5.0)
     cx = clamp(cx, 0.0, 1.0)
