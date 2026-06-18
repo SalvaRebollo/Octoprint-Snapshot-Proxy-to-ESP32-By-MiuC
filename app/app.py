@@ -28,12 +28,14 @@ JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", str(CONFIG_QUALITY)))
 CACHE_MS = int(os.environ.get("CACHE_MS", str(CONFIG_CACHE_MS)))
 REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", str(CONFIG_TIMEOUT)))
 
-last_cache = {"time": None, "bytes": None}
+cache = {}
 
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
 
+def get_cache_key(width, height, quality, zoom, cx, cy):
+    return f"{width}x{height}_q{quality}_z{zoom}_x{cx}_y{cy}"
 
 def jpeg_response(jpg_bytes):
     response = Response(jpg_bytes, mimetype="image/jpeg")
@@ -312,9 +314,8 @@ def index():
             <button class="shortcut" onclick="shortcutNozzle()">Shortcut 2.6x</button>
           </div>
 
-          <a class="button shortcut" target="_blank"
-             href="http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg?zoom=2.6&x=1&y=0.7">
-             Abrir shortcut directo
+          <a class="button shortcut" href="#" onclick="openCurrentDirect(); return false;">
+            Abrir vista actual
           </a>
 
           <div class="url" id="currentUrl"></div>
@@ -356,7 +357,7 @@ def index():
                   <td><code>q</code></td>
                   <td>30 - 95</td>
                   <td>75</td>
-                  <td>Calidad JPEG (0-100)</td>
+                  <td>Calidad JPEG (30-95)</td>
                 </tr>
                 <tr>
                   <td><code>zoom</code></td>
@@ -381,12 +382,13 @@ def index():
 
             <h3>URLs Disponibles</h3>
             <ul>
-              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/</code> - Página principal interactiva</li>
-              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg</code> - Snapshot por defecto (480x270, zoom 1.0)</li>
-              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg?w=800&h=600&q=90</code> - Imagen de mayor resolución y calidad</li>
-              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg?zoom=2.5&x=0.5&y=0.5</code> - Zoom 2.5x en el centro</li>
-              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg?zoom=3&x=0.8&y=0.6&q=85&w=640&h=480</code> - Zoom con posición personalizada</li>
-              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/healthz</code> - Health check del servicio</li>
+              <li><code>/</code> - Página principal interactiva</li>
+              <li><code>/snapshot-lite.jpg</code> - Snapshot por defecto (480x270, zoom 1.0)</li>
+              <li><code>/snapshot-lite.jpg?w=640&h=360&q=90</code> - Imagen 16:9 de mayor resolución y calidad</li>
+              <li><code>/snapshot-lite.jpg?zoom=2.5&x=0.5&y=0.5</code> - Zoom 2.5x en el centro</li>
+              <li><code>/snapshot-lite.jpg?zoom=3&x=0.8&y=0.6&q=85&w=640&h=360</code> - Zoom con posición personalizada</li>
+              <li><code>/snapshot-lite.jpg?zoom=2.6&x=1&y=0.7</code> - Shortcut nozzle/cama</li>
+              <li><code>/healthz</code> - Health check del servicio</li>
             </ul>
 
             <h3>Notas</h3>
@@ -395,6 +397,7 @@ def index():
               <li>Los valores fuera de rango serán ajustados automáticamente</li>
               <li>El cache se refresca cada 500ms</li>
               <li>La imagen se redimensiona manteniendo su proporción original</li>
+              <li>Las rutas son relativas para que funcionen aunque cambie la IP, el puerto o uses proxy inverso</li>
             </ul>
           </div>
         </div>
@@ -430,6 +433,9 @@ def index():
               zoom: zoom.toFixed(1),
               x: x.toFixed(2),
               y: y.toFixed(2),
+
+              // Este parámetro evita que el navegador reutilice una imagen antigua.
+              // Luego lo quitamos de la URL visible para que no moleste.
               t: Date.now().toString()
             });
 
@@ -453,6 +459,14 @@ def index():
             cleanUrl.searchParams.delete("t");
 
             currentUrl.textContent = cleanUrl.toString();
+          }
+
+          function openCurrentDirect() {
+            const relativeUrl = getImageUrl();
+            const cleanUrl = new URL(relativeUrl, window.location.origin);
+            cleanUrl.searchParams.delete("t");
+
+            window.open(cleanUrl.toString(), "_blank");
           }
 
           function resetView() {
@@ -537,11 +551,13 @@ def snapshot_lite():
     cx = clamp(cx, 0.0, 1.0)
     cy = clamp(cy, 0.0, 1.0)
 
+    key = get_cache_key(width, height, quality, zoom, cx, cy)
     now = time.time() * 1000
 
-    if last_cache["time"] is not None:
-        if now - last_cache["time"] < CACHE_MS:
-            return jpeg_response(last_cache["bytes"])
+    if key in cache:
+        cached_time, cached_bytes = cache[key]
+        if now - cached_time < CACHE_MS:
+            return jpeg_response(cached_bytes)
 
     try:
         r = requests.get(OCTOPRINT_SNAPSHOT_URL, timeout=REQUEST_TIMEOUT)
@@ -563,8 +579,7 @@ def snapshot_lite():
         img.save(output, format="JPEG", quality=quality, optimize=True)
         jpg_bytes = output.getvalue()
 
-        last_cache["time"] = now
-        last_cache["bytes"] = jpg_bytes
+        cache[key] = (now, jpg_bytes)
 
         return jpeg_response(jpg_bytes)
 
