@@ -8,26 +8,31 @@ from PIL import Image, ImageOps
 
 app = Flask(__name__)
 
-OCTOPRINT_SNAPSHOT_URL = os.environ.get(
-    "OCTOPRINT_SNAPSHOT_URL",
-    "http://192.168.25.60:30114/webcam/?action=snapshot"
+# Load configuration from config.py, with environment variable overrides
+from config import (
+    PORT as CONFIG_PORT,
+    OCTOPRINT_SNAPSHOT_URL as CONFIG_SNAPSHOT_URL,
+    DEFAULT_WIDTH as CONFIG_WIDTH,
+    DEFAULT_HEIGHT as CONFIG_HEIGHT,
+    JPEG_QUALITY as CONFIG_QUALITY,
+    CACHE_MS as CONFIG_CACHE_MS,
+    REQUEST_TIMEOUT as CONFIG_TIMEOUT,
 )
 
-DEFAULT_WIDTH = int(os.environ.get("DEFAULT_WIDTH", "480"))
-DEFAULT_HEIGHT = int(os.environ.get("DEFAULT_HEIGHT", "270"))
-JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "75"))
-CACHE_MS = int(os.environ.get("CACHE_MS", "500"))
-REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", "5"))
+# Environment variables can override config.py (useful in Docker)
+PORT = int(os.environ.get("PORT", str(CONFIG_PORT)))
+OCTOPRINT_SNAPSHOT_URL = os.environ.get("OCTOPRINT_SNAPSHOT_URL", CONFIG_SNAPSHOT_URL)
+DEFAULT_WIDTH = int(os.environ.get("DEFAULT_WIDTH", str(CONFIG_WIDTH)))
+DEFAULT_HEIGHT = int(os.environ.get("DEFAULT_HEIGHT", str(CONFIG_HEIGHT)))
+JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", str(CONFIG_QUALITY)))
+CACHE_MS = int(os.environ.get("CACHE_MS", str(CONFIG_CACHE_MS)))
+REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", str(CONFIG_TIMEOUT)))
 
-cache = {}
+last_cache = {"time": None, "bytes": None}
 
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
-
-
-def get_cache_key(width, height, quality, zoom, cx, cy):
-    return f"{width}x{height}_q{quality}_z{zoom}_x{cx}_y{cy}"
 
 
 def jpeg_response(jpg_bytes):
@@ -308,7 +313,7 @@ def index():
           </div>
 
           <a class="button shortcut" target="_blank"
-             href="http://192.168.25.60:30113/snapshot-lite.jpg?zoom=2.6&x=1&y=0.7">
+             href="http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg?zoom=2.6&x=1&y=0.7">
              Abrir shortcut directo
           </a>
 
@@ -376,12 +381,12 @@ def index():
 
             <h3>URLs Disponibles</h3>
             <ul>
-              <li><code>http://192.168.25.60:30113/</code> - Página principal interactiva</li>
-              <li><code>http://192.168.25.60:30113/snapshot-lite.jpg</code> - Snapshot por defecto (480x270, zoom 1.0)</li>
-              <li><code>http://192.168.25.60:30113/snapshot-lite.jpg?w=800&h=600&q=90</code> - Imagen de mayor resolución y calidad</li>
-              <li><code>http://192.168.25.60:30113/snapshot-lite.jpg?zoom=2.5&x=0.5&y=0.5</code> - Zoom 2.5x en el centro</li>
-              <li><code>http://192.168.25.60:30113/snapshot-lite.jpg?zoom=3&x=0.8&y=0.6&q=85&w=640&h=480</code> - Zoom con posición personalizada</li>
-              <li><code>http://192.168.25.60:30113/healthz</code> - Health check del servicio</li>
+              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/</code> - Página principal interactiva</li>
+              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg</code> - Snapshot por defecto (480x270, zoom 1.0)</li>
+              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg?w=800&h=600&q=90</code> - Imagen de mayor resolución y calidad</li>
+              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg?zoom=2.5&x=0.5&y=0.5</code> - Zoom 2.5x en el centro</li>
+              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/snapshot-lite.jpg?zoom=3&x=0.8&y=0.6&q=85&w=640&h=480</code> - Zoom con posición personalizada</li>
+              <li><code>http://<TU_IP_OCTOPRINT>:<TU_PUERTO_OCTOPRINT>/healthz</code> - Health check del servicio</li>
             </ul>
 
             <h3>Notas</h3>
@@ -532,13 +537,11 @@ def snapshot_lite():
     cx = clamp(cx, 0.0, 1.0)
     cy = clamp(cy, 0.0, 1.0)
 
-    key = get_cache_key(width, height, quality, zoom, cx, cy)
     now = time.time() * 1000
 
-    if key in cache:
-        cached_time, cached_bytes = cache[key]
-        if now - cached_time < CACHE_MS:
-            return jpeg_response(cached_bytes)
+    if last_cache["time"] is not None:
+        if now - last_cache["time"] < CACHE_MS:
+            return jpeg_response(last_cache["bytes"])
 
     try:
         r = requests.get(OCTOPRINT_SNAPSHOT_URL, timeout=REQUEST_TIMEOUT)
@@ -560,7 +563,8 @@ def snapshot_lite():
         img.save(output, format="JPEG", quality=quality, optimize=True)
         jpg_bytes = output.getvalue()
 
-        cache[key] = (now, jpg_bytes)
+        last_cache["time"] = now
+        last_cache["bytes"] = jpg_bytes
 
         return jpeg_response(jpg_bytes)
 
@@ -570,4 +574,4 @@ def snapshot_lite():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=30113)
+    app.run(host="0.0.0.0", port=PORT)
