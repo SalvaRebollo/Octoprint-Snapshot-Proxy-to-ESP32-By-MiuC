@@ -9,27 +9,28 @@ import requests
 from flask import Flask, Response, redirect, request
 from PIL import Image, ImageOps
 
+import config as config_file
+
 app = Flask(__name__)
 
-# Load configuration from config.py, with environment variable overrides
-from config import (
-    PORT as CONFIG_PORT,
-    OCTOPRINT_SNAPSHOT_URL as CONFIG_SNAPSHOT_URL,
-    DEFAULT_WIDTH as CONFIG_WIDTH,
-    DEFAULT_HEIGHT as CONFIG_HEIGHT,
-    JPEG_QUALITY as CONFIG_QUALITY,
-    CACHE_MS as CONFIG_CACHE_MS,
-    REQUEST_TIMEOUT as CONFIG_TIMEOUT,
+PORT = int(os.environ.get("PORT", str(getattr(config_file, "PORT", 30113))))
+OCTOPRINT_SNAPSHOT_URL = os.environ.get(
+    "OCTOPRINT_SNAPSHOT_URL",
+    getattr(config_file, "OCTOPRINT_SNAPSHOT_URL", ""),
 )
-
-# Environment variables can override config.py (useful in Docker)
-PORT = int(os.environ.get("PORT", str(CONFIG_PORT)))
-OCTOPRINT_SNAPSHOT_URL = os.environ.get("OCTOPRINT_SNAPSHOT_URL", CONFIG_SNAPSHOT_URL)
-DEFAULT_WIDTH = int(os.environ.get("DEFAULT_WIDTH", str(CONFIG_WIDTH)))
-DEFAULT_HEIGHT = int(os.environ.get("DEFAULT_HEIGHT", str(CONFIG_HEIGHT)))
-JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", str(CONFIG_QUALITY)))
-CACHE_MS = int(os.environ.get("CACHE_MS", str(CONFIG_CACHE_MS)))
-REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", str(CONFIG_TIMEOUT)))
+DEFAULT_WIDTH = int(
+    os.environ.get("DEFAULT_WIDTH", str(getattr(config_file, "DEFAULT_WIDTH", 480)))
+)
+DEFAULT_HEIGHT = int(
+    os.environ.get("DEFAULT_HEIGHT", str(getattr(config_file, "DEFAULT_HEIGHT", 270)))
+)
+JPEG_QUALITY = int(
+    os.environ.get("JPEG_QUALITY", str(getattr(config_file, "JPEG_QUALITY", 75)))
+)
+CACHE_MS = int(os.environ.get("CACHE_MS", str(getattr(config_file, "CACHE_MS", 500))))
+REQUEST_TIMEOUT = float(
+    os.environ.get("REQUEST_TIMEOUT", str(getattr(config_file, "REQUEST_TIMEOUT", 5)))
+)
 
 cache = {}
 config_lock = RLock()
