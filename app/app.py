@@ -1,7 +1,9 @@
 import os
+import re
 import time
 from io import BytesIO
 from pathlib import Path
+from threading import RLock
 
 import requests
 from flask import Flask, Response, redirect, request
@@ -30,6 +32,7 @@ CACHE_MS = int(os.environ.get("CACHE_MS", str(CONFIG_CACHE_MS)))
 REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", str(CONFIG_TIMEOUT)))
 
 cache = {}
+config_lock = RLock()
 
 
 def clamp(value, minimum, maximum):
@@ -44,17 +47,45 @@ def load_runtime_config():
     global CACHE_MS
     global REQUEST_TIMEOUT
 
-    config_path = Path(__file__).with_name("config.py")
-    values = {}
-    exec(compile(config_path.read_text(encoding="utf-8"), config_path, "exec"), values)
+    with config_lock:
+        config_path = Path(__file__).with_name("config.py")
+        values = {}
+        exec(compile(config_path.read_text(encoding="utf-8"), config_path, "exec"), values)
 
-    OCTOPRINT_SNAPSHOT_URL = str(values["OCTOPRINT_SNAPSHOT_URL"])
-    DEFAULT_WIDTH = clamp(int(values["DEFAULT_WIDTH"]), 80, 1280)
-    DEFAULT_HEIGHT = clamp(int(values["DEFAULT_HEIGHT"]), 80, 720)
-    JPEG_QUALITY = clamp(int(values["JPEG_QUALITY"]), 30, 95)
-    CACHE_MS = max(0, int(values["CACHE_MS"]))
-    REQUEST_TIMEOUT = max(0.1, float(values["REQUEST_TIMEOUT"]))
-    cache.clear()
+        OCTOPRINT_SNAPSHOT_URL = str(values["OCTOPRINT_SNAPSHOT_URL"])
+        DEFAULT_WIDTH = clamp(int(values["DEFAULT_WIDTH"]), 80, 1280)
+        DEFAULT_HEIGHT = clamp(int(values["DEFAULT_HEIGHT"]), 80, 720)
+        JPEG_QUALITY = clamp(int(values["JPEG_QUALITY"]), 30, 95)
+        CACHE_MS = max(0, int(values["CACHE_MS"]))
+        REQUEST_TIMEOUT = max(0.1, float(values["REQUEST_TIMEOUT"]))
+        cache.clear()
+
+
+def save_resolution_to_config(width, height):
+    config_path = Path(__file__).with_name("config.py")
+
+    with config_lock:
+        text = config_path.read_text(encoding="utf-8")
+        text, width_count = re.subn(
+            r"^DEFAULT_WIDTH\s*=.*$",
+            f"DEFAULT_WIDTH = {width}",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        text, height_count = re.subn(
+            r"^DEFAULT_HEIGHT\s*=.*$",
+            f"DEFAULT_HEIGHT = {height}",
+            text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+
+        if width_count != 1 or height_count != 1:
+            raise ValueError("No se encontraron DEFAULT_WIDTH y DEFAULT_HEIGHT en config.py")
+
+        config_path.write_text(text, encoding="utf-8")
+        load_runtime_config()
 
 
 def get_cache_key(width, height, quality, zoom, cx, cy):
@@ -162,6 +193,24 @@ def index():
 
           input[type="range"] {
             width: 100%;
+          }
+
+          select,
+          input[type="number"] {
+            width: 100%;
+            box-sizing: border-box;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 9px;
+            background: #111;
+            color: #eee;
+          }
+
+          .custom-resolution {
+            display: none;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 8px;
+            margin-top: 8px;
           }
 
           button,
@@ -323,6 +372,23 @@ def index():
               <label>Calidad JPEG: <span id="qValue">__JPEG_QUALITY__</span></label>
               <input id="q" type="range" min="30" max="95" step="1" value="__JPEG_QUALITY__">
             </div>
+
+            <div class="row">
+              <label for="resolutionPreset">Resolución por defecto</label>
+              <select id="resolutionPreset" onchange="resolutionChanged()">
+                <option value="320x240">320 × 240</option>
+                <option value="480x270">480 × 270</option>
+                <option value="640x360">640 × 360</option>
+                <option value="800x480">800 × 480</option>
+                <option value="1280x720">1280 × 720</option>
+                <option value="custom">Personalizada</option>
+              </select>
+              <div class="custom-resolution" id="customResolution">
+                <input id="customWidth" type="number" min="80" max="1280" value="__DEFAULT_WIDTH__" aria-label="Ancho">
+                <input id="customHeight" type="number" min="80" max="720" value="__DEFAULT_HEIGHT__" aria-label="Alto">
+                <button onclick="applyCustomResolution()">Aplicar</button>
+              </div>
+            </div>
           </div>
 
           <div class="buttons">
@@ -441,6 +507,10 @@ def index():
           const qValue = document.getElementById("qValue");
           const currentUrl = document.getElementById("currentUrl");
           const previewModeButton = document.getElementById("previewModeButton");
+          const resolutionPreset = document.getElementById("resolutionPreset");
+          const customResolution = document.getElementById("customResolution");
+          const customWidth = document.getElementById("customWidth");
+          const customHeight = document.getElementById("customHeight");
           let previewMode = "snapshot";
 
           function clamp(value, min, max) {
@@ -531,6 +601,36 @@ def index():
             window.location.reload();
           }
 
+          async function saveResolution(width, height) {
+            const response = await fetch("/set-resolution", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ width, height })
+            });
+
+            if (!response.ok) {
+              alert(await response.text());
+              return;
+            }
+
+            window.location.reload();
+          }
+
+          function resolutionChanged() {
+            if (resolutionPreset.value === "custom") {
+              customResolution.style.display = "grid";
+              return;
+            }
+
+            customResolution.style.display = "none";
+            const [width, height] = resolutionPreset.value.split("x").map(Number);
+            saveResolution(width, height);
+          }
+
+          function applyCustomResolution() {
+            saveResolution(parseInt(customWidth.value), parseInt(customHeight.value));
+          }
+
           function openCurrentDirect() {
             const relativeUrl = getImageUrl();
             const cleanUrl = new URL(relativeUrl, window.location.origin);
@@ -592,6 +692,17 @@ def index():
 
           setInterval(updateImage, 1000);
 
+          const configuredResolution = "__DEFAULT_WIDTH__x__DEFAULT_HEIGHT__";
+          const configuredOption = Array.from(resolutionPreset.options)
+            .find(option => option.value === configuredResolution);
+
+          if (configuredOption) {
+            resolutionPreset.value = configuredResolution;
+          } else {
+            resolutionPreset.value = "custom";
+            customResolution.style.display = "grid";
+          }
+
           updateImage();
         </script>
       </body>
@@ -619,6 +730,24 @@ def reload_config():
         }
     except Exception as e:
         return Response(f"Error cargando config.py: {e}", status=500, mimetype="text/plain")
+
+
+@app.route("/set-resolution", methods=["POST"])
+def set_resolution():
+    try:
+        data = request.get_json(silent=True) or {}
+        width = int(data.get("width"))
+        height = int(data.get("height"))
+
+        if not 80 <= width <= 1280:
+            raise ValueError("El ancho debe estar entre 80 y 1280")
+        if not 80 <= height <= 720:
+            raise ValueError("El alto debe estar entre 80 y 720")
+
+        save_resolution_to_config(width, height)
+        return {"status": "ok", "width": width, "height": height}
+    except Exception as e:
+        return Response(f"Error guardando resolución: {e}", status=400, mimetype="text/plain")
 
 
 @app.route("/healthz")
