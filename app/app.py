@@ -1,6 +1,7 @@
 import os
 import time
 from io import BytesIO
+from pathlib import Path
 
 import requests
 from flask import Flask, Response, redirect, request
@@ -33,6 +34,28 @@ cache = {}
 
 def clamp(value, minimum, maximum):
     return max(minimum, min(maximum, value))
+
+
+def load_runtime_config():
+    global OCTOPRINT_SNAPSHOT_URL
+    global DEFAULT_WIDTH
+    global DEFAULT_HEIGHT
+    global JPEG_QUALITY
+    global CACHE_MS
+    global REQUEST_TIMEOUT
+
+    config_path = Path(__file__).with_name("config.py")
+    values = {}
+    exec(compile(config_path.read_text(encoding="utf-8"), config_path, "exec"), values)
+
+    OCTOPRINT_SNAPSHOT_URL = str(values["OCTOPRINT_SNAPSHOT_URL"])
+    DEFAULT_WIDTH = clamp(int(values["DEFAULT_WIDTH"]), 80, 1280)
+    DEFAULT_HEIGHT = clamp(int(values["DEFAULT_HEIGHT"]), 80, 720)
+    JPEG_QUALITY = clamp(int(values["JPEG_QUALITY"]), 30, 95)
+    CACHE_MS = max(0, int(values["CACHE_MS"]))
+    REQUEST_TIMEOUT = max(0.1, float(values["REQUEST_TIMEOUT"]))
+    cache.clear()
+
 
 def get_cache_key(width, height, quality, zoom, cx, cy):
     return f"{width}x{height}_q{quality}_z{zoom}_x{cx}_y{cy}"
@@ -315,7 +338,7 @@ def index():
             <button onclick="moveDown()">↓ Abajo</button>
             <button class="shortcut" onclick="shortcutNozzle()">Shortcut 2.6x</button>
           </div>
-
+          <button onclick="getFromConfig()">Get from config</button>
           <a class="button shortcut" href="#" onclick="openCurrentDirect(); return false;">
             Abrir vista actual
           </a>
@@ -497,6 +520,17 @@ def index():
             updateImage();
           }
 
+          async function getFromConfig() {
+            const response = await fetch("/reload-config", { method: "POST" });
+
+            if (!response.ok) {
+              alert(await response.text());
+              return;
+            }
+
+            window.location.reload();
+          }
+
           function openCurrentDirect() {
             const relativeUrl = getImageUrl();
             const cleanUrl = new URL(relativeUrl, window.location.origin);
@@ -570,6 +604,21 @@ def index():
         .replace("__JPEG_QUALITY__", str(JPEG_QUALITY))
         .replace("__CACHE_MS__", str(CACHE_MS))
     )
+
+
+@app.route("/reload-config", methods=["POST"])
+def reload_config():
+    try:
+        load_runtime_config()
+        return {
+            "status": "ok",
+            "width": DEFAULT_WIDTH,
+            "height": DEFAULT_HEIGHT,
+            "quality": JPEG_QUALITY,
+            "cache_ms": CACHE_MS,
+        }
+    except Exception as e:
+        return Response(f"Error cargando config.py: {e}", status=500, mimetype="text/plain")
 
 
 @app.route("/healthz")
