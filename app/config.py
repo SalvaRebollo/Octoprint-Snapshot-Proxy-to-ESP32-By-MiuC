@@ -2,7 +2,7 @@
 # Copy config.example.py to config.py and adjust values
 
 # Flask server port
-PORT = <OCTOPRINT_PORT>
+PORT = Choose a port number (e.g., 8088)
 
 # OctoPrint snapshot URL
 OCTOPRINT_SNAPSHOT_URL = "http://<OCTOPRINT_IP>:<OCTOPRINT_PORT>/webcam/?action=snapshot"
