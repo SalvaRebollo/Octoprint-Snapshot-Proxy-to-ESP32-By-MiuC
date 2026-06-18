@@ -76,7 +76,7 @@ def crop_zoom(img, zoom, cx, cy):
 
 @app.route("/")
 def index():
-    return """
+    html = """
     <html>
       <head>
         <title>OctoPrint Snapshot Proxy</title>
@@ -297,8 +297,8 @@ def index():
             </div>
 
             <div class="row">
-              <label>Calidad JPEG: <span id="qValue">75</span></label>
-              <input id="q" type="range" min="30" max="95" step="1" value="75">
+              <label>Calidad JPEG: <span id="qValue">__JPEG_QUALITY__</span></label>
+              <input id="q" type="range" min="30" max="95" step="1" value="__JPEG_QUALITY__">
             </div>
           </div>
 
@@ -346,19 +346,19 @@ def index():
                 <tr>
                   <td><code>w</code></td>
                   <td>80 - 1280</td>
-                  <td>480</td>
+                  <td>__DEFAULT_WIDTH__</td>
                   <td>Ancho de la imagen en píxeles</td>
                 </tr>
                 <tr>
                   <td><code>h</code></td>
                   <td>80 - 720</td>
-                  <td>270</td>
+                  <td>__DEFAULT_HEIGHT__</td>
                   <td>Alto de la imagen en píxeles</td>
                 </tr>
                 <tr>
                   <td><code>q</code></td>
                   <td>30 - 95</td>
-                  <td>75</td>
+                  <td>__JPEG_QUALITY__</td>
                   <td>Calidad JPEG (30-95)</td>
                 </tr>
                 <tr>
@@ -385,7 +385,7 @@ def index():
             <h3>URLs Disponibles</h3>
             <ul>
               <li><code>/</code> - Página principal interactiva</li>
-              <li><code>/snapshot-lite.jpg</code> - Snapshot por defecto (480x270, zoom 1.0)</li>
+              <li><code>/snapshot-lite.jpg</code> - Snapshot por defecto (__DEFAULT_WIDTH__x__DEFAULT_HEIGHT__, calidad __JPEG_QUALITY__, zoom 1.0)</li>
               <li><code>/snapshot-lite.jpg?w=640&h=360&q=90</code> - Imagen 16:9 de mayor resolución y calidad</li>
               <li><code>/snapshot-lite.jpg?zoom=2.5&x=0.5&y=0.5</code> - Zoom 2.5x en el centro</li>
               <li><code>/snapshot-lite.jpg?zoom=3&x=0.8&y=0.6&q=85&w=640&h=360</code> - Zoom con posición personalizada</li>
@@ -397,7 +397,7 @@ def index():
             <ul>
               <li>Todos los parámetros son opcionales</li>
               <li>Los valores fuera de rango serán ajustados automáticamente</li>
-              <li>El cache se refresca cada 500ms</li>
+              <li>El cache se refresca cada __CACHE_MS__ms</li>
               <li>La imagen se redimensiona manteniendo su proporción original</li>
               <li>Las rutas son relativas para que funcionen aunque cambie la IP, el puerto o uses proxy inverso</li>
             </ul>
@@ -431,8 +431,8 @@ def index():
             const q = parseInt(qInput.value);
 
             const params = new URLSearchParams({
-              w: "480",
-              h: "270",
+              w: "__DEFAULT_WIDTH__",
+              h: "__DEFAULT_HEIGHT__",
               q: q.toString(),
               zoom: zoom.toFixed(1),
               x: x.toFixed(2),
@@ -509,7 +509,7 @@ def index():
             zoomInput.value = "1";
             xInput.value = "0.5";
             yInput.value = "0.5";
-            qInput.value = "75";
+            qInput.value = "__JPEG_QUALITY__";
             updateImage();
           }
 
@@ -563,6 +563,13 @@ def index():
       </body>
     </html>
     """
+    return (
+        html
+        .replace("__DEFAULT_WIDTH__", str(DEFAULT_WIDTH))
+        .replace("__DEFAULT_HEIGHT__", str(DEFAULT_HEIGHT))
+        .replace("__JPEG_QUALITY__", str(JPEG_QUALITY))
+        .replace("__CACHE_MS__", str(CACHE_MS))
+    )
 
 
 @app.route("/healthz")
