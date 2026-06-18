@@ -3,7 +3,7 @@ import time
 from io import BytesIO
 
 import requests
-from flask import Flask, Response, request
+from flask import Flask, Response, redirect, request
 from PIL import Image, ImageOps
 
 app = Flask(__name__)
@@ -100,6 +100,7 @@ def index():
             width: 100%;
             max-width: 960px;
             margin-bottom: 16px;
+            overflow: hidden;
           }
 
           #cam {
@@ -107,6 +108,7 @@ def index():
             border: 2px solid #444;
             background: #000;
             display: block;
+            transform-origin: 50% 50%;
           }
 
           .panel {
@@ -309,7 +311,7 @@ def index():
             <button onclick="moveUp()">↑ Arriba</button>
             <button onclick="moveRight()">Derecha →</button>
 
-            <button class="primary" onclick="updateImage()">Actualizar</button>
+            <button class="primary" id="previewModeButton" onclick="togglePreview()">Ver stream directo</button>
             <button onclick="moveDown()">↓ Abajo</button>
             <button class="shortcut" onclick="shortcutNozzle()">Shortcut 2.6x</button>
           </div>
@@ -415,6 +417,8 @@ def index():
           const yValue = document.getElementById("yValue");
           const qValue = document.getElementById("qValue");
           const currentUrl = document.getElementById("currentUrl");
+          const previewModeButton = document.getElementById("previewModeButton");
+          let previewMode = "snapshot";
 
           function clamp(value, min, max) {
             return Math.max(min, Math.min(max, value));
@@ -452,6 +456,25 @@ def index():
           function updateImage() {
             updateLabels();
 
+            if (previewMode === "stream") {
+              const zoom = parseFloat(zoomInput.value);
+              const x = parseFloat(xInput.value);
+              const y = parseFloat(yInput.value);
+              const cropWidth = 1 / zoom;
+              const cropHeight = 1 / zoom;
+              const left = clamp(x - cropWidth / 2, 0, 1 - cropWidth);
+              const top = clamp(y - cropHeight / 2, 0, 1 - cropHeight);
+
+              cam.style.transformOrigin = "0 0";
+              cam.style.transform =
+                "scale(" + zoom + ") translate(" + (-left * 100) + "%, " + (-top * 100) + "%)";
+              currentUrl.textContent = new URL("/stream-direct", window.location.origin).toString();
+              return;
+            }
+
+            cam.style.transform = "none";
+            cam.style.transformOrigin = "50% 50%";
+
             const relativeUrl = getImageUrl();
             cam.src = relativeUrl;
 
@@ -459,6 +482,19 @@ def index():
             cleanUrl.searchParams.delete("t");
 
             currentUrl.textContent = cleanUrl.toString();
+          }
+
+          function togglePreview() {
+            if (previewMode === "snapshot") {
+              previewMode = "stream";
+              cam.src = "/stream-direct";
+              previewModeButton.textContent = "Ver snapshot";
+            } else {
+              previewMode = "snapshot";
+              previewModeButton.textContent = "Ver stream directo";
+            }
+
+            updateImage();
           }
 
           function openCurrentDirect() {
@@ -532,6 +568,12 @@ def index():
 @app.route("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+@app.route("/stream-direct")
+def stream_direct():
+    stream_url = OCTOPRINT_SNAPSHOT_URL.replace("action=snapshot", "action=stream")
+    return redirect(stream_url)
 
 
 @app.route("/snapshot-lite.jpg")
