@@ -1,0 +1,11 @@
+#pragma once
+
+#include <lvgl.h>
+
+enum class AppPage : uint8_t {
+  COUNTER,
+  OCTOPRINT,
+  SETTINGS
+};
+
+void appShowPage(AppPage page, lv_anim_enable_t animation = LV_ANIM_ON);

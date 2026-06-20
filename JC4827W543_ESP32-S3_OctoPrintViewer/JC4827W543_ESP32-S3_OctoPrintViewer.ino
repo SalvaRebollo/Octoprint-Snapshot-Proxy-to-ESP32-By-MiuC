@@ -1,0 +1,276 @@
+#include <Arduino.h>
+#include <lvgl.h>
+#include <Arduino_GFX_Library.h>
+#include <esp_heap_caps.h>
+
+#include "src/core/app_config.h"
+#include "src/core/app_navigation.h"
+#include "src/tabs/tab_counter.h"
+#include "src/tabs/tab_settings.h"
+#include "touch.h"
+
+#if APP_ENABLE_OCTOPRINT
+#include "src/features/octoprint/octoprint_feature.h"
+#include "src/tabs/tab_octoprint.h"
+#endif
+
+// ============================================================
+// HARDWARE JC4827W543
+// ============================================================
+
+#define GFX_BL 1
+
+Arduino_DataBus *bus = new Arduino_ESP32QSPI(
+  45, 47, 21, 48, 40, 39
+);
+
+Arduino_GFX *panel = new Arduino_NV3041A(
+  bus,
+  GFX_NOT_DEFINED,
+  0,
+  true
+);
+
+Arduino_GFX *gfx = new Arduino_Canvas(
+  APP_SCREEN_WIDTH,
+  APP_SCREEN_HEIGHT,
+  panel
+);
+
+// ============================================================
+// BASE DE LA APLICACION
+// ============================================================
+
+static lv_disp_draw_buf_t drawBuffer;
+static lv_disp_drv_t displayDriver;
+static lv_color_t *lvglBuffer = nullptr;
+static bool displayFlushPending = false;
+static lv_obj_t *tabView = nullptr;
+
+static uint8_t counterTabIndex = 0;
+static int8_t octoprintTabIndex = -1;
+static uint8_t settingsTabIndex = 0;
+
+void serviceUi() {
+  lv_timer_handler();
+  if (displayFlushPending) {
+    displayFlushPending = false;
+    gfx->flush();
+  }
+}
+
+void appShowPage(AppPage page, lv_anim_enable_t animation) {
+  if (tabView == nullptr) return;
+
+  uint8_t target = counterTabIndex;
+  switch (page) {
+    case AppPage::COUNTER:
+      target = counterTabIndex;
+      break;
+
+    case AppPage::OCTOPRINT:
+      if (octoprintTabIndex < 0) return;
+      target = static_cast<uint8_t>(octoprintTabIndex);
+      break;
+
+    case AppPage::SETTINGS:
+      target = settingsTabIndex;
+      break;
+  }
+
+  lv_tabview_set_act(tabView, target, animation);
+}
+
+void onTabChanged(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+
+#if APP_ENABLE_OCTOPRINT
+  OctoPrintFeature::hideControls();
+  if (lv_tabview_get_tab_act(tabView) == octoprintTabIndex) {
+    OctoPrintFeature::onTabActivated();
+  }
+#endif
+}
+
+void createApplicationUi() {
+  lv_obj_clean(lv_scr_act());
+
+  tabView = lv_tabview_create(
+    lv_scr_act(),
+    LV_DIR_TOP,
+    APP_TAB_BAR_HEIGHT
+  );
+  lv_obj_set_size(tabView, APP_SCREEN_WIDTH, APP_SCREEN_HEIGHT);
+  lv_obj_center(tabView);
+  lv_obj_add_event_cb(tabView, onTabChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  uint8_t nextIndex = 0;
+
+  counterTabIndex = nextIndex++;
+  lv_obj_t *counterTab = lv_tabview_add_tab(tabView, "Contador");
+  CounterTab::create(counterTab);
+
+#if APP_ENABLE_OCTOPRINT
+  octoprintTabIndex = nextIndex++;
+  lv_obj_t *octoprintTab = lv_tabview_add_tab(tabView, "OctoPrint");
+  OctoPrintTab::create(octoprintTab);
+#else
+  octoprintTabIndex = -1;
+#endif
+
+  settingsTabIndex = nextIndex++;
+  lv_obj_t *settingsTab = lv_tabview_add_tab(tabView, "Ajustes");
+  SettingsTab::create(settingsTab);
+
+#if APP_ENABLE_OCTOPRINT
+  OctoPrintFeature::createOverlays();
+#endif
+  SettingsTab::createOverlay();
+
+#if APP_ENABLE_OCTOPRINT
+  appShowPage(AppPage::OCTOPRINT, LV_ANIM_OFF);
+#else
+  appShowPage(AppPage::COUNTER, LV_ANIM_OFF);
+#endif
+}
+
+// ============================================================
+// DRIVERS LVGL
+// ============================================================
+
+void myDisplayFlush(
+  lv_disp_drv_t *display,
+  const lv_area_t *area,
+  lv_color_t *colors
+) {
+  uint32_t width = area->x2 - area->x1 + 1;
+  uint32_t height = area->y2 - area->y1 + 1;
+
+#if (LV_COLOR_16_SWAP != 0)
+  gfx->draw16bitBeRGBBitmap(
+    area->x1,
+    area->y1,
+    reinterpret_cast<uint16_t *>(&colors->full),
+    width,
+    height
+  );
+#else
+  gfx->draw16bitRGBBitmap(
+    area->x1,
+    area->y1,
+    reinterpret_cast<uint16_t *>(&colors->full),
+    width,
+    height
+  );
+#endif
+
+  displayFlushPending = true;
+  lv_disp_flush_ready(display);
+}
+
+void myTouchpadRead(lv_indev_drv_t *, lv_indev_data_t *data) {
+  if (touch_has_signal() && touch_touched()) {
+    data->state = LV_INDEV_STATE_PR;
+    data->point.x = touch_last_x;
+    data->point.y = touch_last_y;
+  } else {
+    data->state = LV_INDEV_STATE_REL;
+  }
+}
+
+bool initializeLvgl() {
+  touch_init(gfx->width(), gfx->height(), gfx->getRotation());
+  lv_init();
+
+  uint32_t screenWidth = gfx->width();
+  uint32_t screenHeight = gfx->height();
+  uint32_t bufferSize = screenWidth * 40;
+
+  lvglBuffer = static_cast<lv_color_t *>(
+    heap_caps_malloc(
+      sizeof(lv_color_t) * bufferSize,
+      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT
+    )
+  );
+
+  if (lvglBuffer == nullptr) {
+    lvglBuffer = static_cast<lv_color_t *>(
+      heap_caps_malloc(
+        sizeof(lv_color_t) * bufferSize,
+        MALLOC_CAP_8BIT
+      )
+    );
+  }
+
+  if (lvglBuffer == nullptr) {
+    Serial.println("No se pudo reservar buffer LVGL");
+    return false;
+  }
+
+  lv_disp_draw_buf_init(&drawBuffer, lvglBuffer, nullptr, bufferSize);
+
+  lv_disp_drv_init(&displayDriver);
+  displayDriver.hor_res = screenWidth;
+  displayDriver.ver_res = screenHeight;
+  displayDriver.flush_cb = myDisplayFlush;
+  displayDriver.draw_buf = &drawBuffer;
+  lv_disp_drv_register(&displayDriver);
+
+  static lv_indev_drv_t inputDriver;
+  lv_indev_drv_init(&inputDriver);
+  inputDriver.type = LV_INDEV_TYPE_POINTER;
+  inputDriver.read_cb = myTouchpadRead;
+  lv_indev_drv_register(&inputDriver);
+  return true;
+}
+
+// ============================================================
+// SETUP Y LOOP
+// ============================================================
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Iniciando plantilla JC4827W543...");
+
+  if (!gfx->begin()) {
+    Serial.println("gfx->begin() fallo");
+  }
+
+  gfx->fillScreen(RGB565_BLACK);
+  pinMode(GFX_BL, OUTPUT);
+  digitalWrite(GFX_BL, HIGH);
+
+  if (!initializeLvgl()) return;
+
+#if APP_ENABLE_OCTOPRINT
+  if (!OctoPrintFeature::begin()) {
+    Serial.println("No se pudo iniciar la feature OctoPrint");
+    return;
+  }
+#endif
+
+  createApplicationUi();
+  serviceUi();
+
+#if APP_ENABLE_OCTOPRINT
+  OctoPrintFeature::startWorker();
+#endif
+  SettingsTab::beginWifi();
+
+  Serial.println("Setup terminado");
+}
+
+void loop() {
+  serviceUi();
+  SettingsTab::loop();
+
+#if APP_ENABLE_OCTOPRINT
+  bool octoprintActive =
+    tabView != nullptr &&
+    octoprintTabIndex >= 0 &&
+    lv_tabview_get_tab_act(tabView) == octoprintTabIndex;
+  OctoPrintFeature::loop(octoprintActive);
+#endif
+
+  delay(5);
+}
