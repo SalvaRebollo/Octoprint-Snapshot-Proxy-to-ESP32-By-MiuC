@@ -51,6 +51,8 @@ static lv_disp_drv_t displayDriver;
 static lv_color_t *lvglBuffer = nullptr;
 static bool displayFlushPending = false;
 static lv_obj_t *tabView = nullptr;
+static lv_obj_t *performanceMonitorLabel = nullptr;
+static uint32_t lastPerformanceMonitorSearchMs = 0;
 
 static uint8_t counterTabIndex = 0;
 static int8_t domoticaTabIndex = -1;
@@ -92,6 +94,68 @@ void appShowPage(AppPage page, lv_anim_enable_t animation) {
   lv_tabview_set_act(tabView, target, animation);
 }
 
+void appPreviewTabBarHeight(uint16_t height) {
+  if (tabView == nullptr) return;
+
+  lv_obj_t *tabButtons = lv_tabview_get_tab_btns(tabView);
+  if (tabButtons == nullptr) return;
+
+  lv_obj_set_height(tabButtons, height);
+  lv_obj_update_layout(tabView);
+}
+
+void appApplyTabViewAppearance() {
+  if (tabView == nullptr) return;
+
+  lv_obj_t *tabButtons = lv_tabview_get_tab_btns(tabView);
+  if (tabButtons == nullptr) return;
+
+  lv_obj_set_style_text_color(
+    tabButtons,
+    AppTheme::isDarkMode() ? lv_color_white() : lv_color_black(),
+    LV_PART_ITEMS | LV_STATE_CHECKED
+  );
+  appPreviewTabBarHeight(AppTheme::tabBarHeight());
+}
+
+void appApplyPerformanceMonitorVisibility() {
+#if LV_USE_PERF_MONITOR && LV_USE_LABEL
+  if (performanceMonitorLabel == nullptr) {
+    lv_obj_t *systemLayer = lv_layer_sys();
+    uint32_t childCount = lv_obj_get_child_cnt(systemLayer);
+    for (uint32_t i = 0; i < childCount; i++) {
+      lv_obj_t *child = lv_obj_get_child(systemLayer, i);
+      if (!lv_obj_check_type(child, &lv_label_class)) continue;
+
+      const char *text = lv_label_get_text(child);
+      if (
+        text != nullptr &&
+        strstr(text, "FPS") != nullptr &&
+        strstr(text, "CPU") != nullptr
+      ) {
+        performanceMonitorLabel = child;
+        break;
+      }
+    }
+  }
+
+  if (performanceMonitorLabel != nullptr) {
+    if (AppTheme::showPerformanceMonitor()) {
+      lv_obj_clear_flag(performanceMonitorLabel, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(performanceMonitorLabel, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+#endif
+}
+
+void servicePerformanceMonitorSetting() {
+  if (performanceMonitorLabel != nullptr) return;
+  if (millis() - lastPerformanceMonitorSearchMs < 500) return;
+  lastPerformanceMonitorSearchMs = millis();
+  appApplyPerformanceMonitorVisibility();
+}
+
 void onTabChanged(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
 
@@ -109,18 +173,14 @@ void createApplicationUi() {
   tabView = lv_tabview_create(
     lv_scr_act(),
     LV_DIR_TOP,
-    APP_TAB_BAR_HEIGHT
+    AppTheme::tabBarHeight()
   );
   lv_obj_set_size(tabView, APP_SCREEN_WIDTH, APP_SCREEN_HEIGHT);
   lv_obj_center(tabView);
   lv_obj_add_event_cb(tabView, onTabChanged, LV_EVENT_VALUE_CHANGED, nullptr);
 
-  lv_obj_t *tabButtons = lv_tabview_get_tab_btns(tabView);
-  lv_obj_set_style_text_color(
-    tabButtons,
-    lv_color_white(),
-    LV_PART_ITEMS | LV_STATE_CHECKED
-  );
+  appApplyTabViewAppearance();
+
 
   uint8_t nextIndex = 0;
 
@@ -294,6 +354,7 @@ void setup() {
 
 void loop() {
   serviceUi();
+  servicePerformanceMonitorSetting();
   SettingsTab::loop();
 
 #if APP_ENABLE_DOMOTICA

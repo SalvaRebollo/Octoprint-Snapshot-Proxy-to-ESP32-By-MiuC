@@ -53,6 +53,16 @@ Arduino compila recursivamente los archivos `.cpp` que están dentro de `src/`.
 
 Cada tab conserva dentro de su carpeta sus propios `features/` y `services/`. Solo el código realmente compartido debe vivir en `src/core`.
 
+## Categorías de Ajustes
+
+La tab `Ajustes` funciona como índice y no contiene directamente los controles. Cada categoría abre una ventana independiente con cabecera y botón `VOLVER`.
+
+Las categorías actuales son:
+
+- `Apariencia`: modo claro/oscuro y color principal.
+- `WiFi`: estado de conexión, reconexión y gestión de redes guardadas.
+
+Para añadir futuras opciones, como Bluetooth, se crea una nueva página dentro de `tab_settings.cpp`, se añade su valor a `SettingsCategory` y se registra un botón en la pantalla índice.
 ## Tema claro y oscuro
 
 `src/core/app_theme.h/.cpp` administra el tema general de LVGL. La preferencia se guarda en NVS dentro del namespace `appui`, usando la clave `dark`.
@@ -98,3 +108,12 @@ La pestaña Domótica crea automáticamente un botón por cada elemento. Para a�
 Antes de publicar, comprueba que el archivo privado continúa ignorado y que nunca se ha añadido previamente al historial de Git.
 
 La tarea de fondo nunca modifica objetos LVGL. Todas las actualizaciones visuales se realizan desde el hilo principal.
+
+## Conexión con el proxy OctoPrint
+
+La dirección del proxy ya no está escrita en el firmware. Desde `OctoPrint > PARAMETROS` se configuran por separado:
+
+- IP del servidor, vacía por defecto.
+- Puerto, `30113` por defecto.
+
+El endpoint mantiene la ruta fija `/snapshot-lite.jpg`. Los valores se guardan en el namespace NVS `octoview` con las claves `proxyip` y `proxyport`. Si la IP está vacía, la tarea de snapshots permanece detenida.

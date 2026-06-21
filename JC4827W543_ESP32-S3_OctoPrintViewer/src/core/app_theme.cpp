@@ -3,13 +3,20 @@
 #include <Preferences.h>
 #include <lvgl.h>
 
+#include "app_config.h"
+
 namespace AppTheme {
 namespace {
 constexpr const char *NVS_NAMESPACE = "appui";
 constexpr const char *NVS_DARK_KEY = "dark";
 constexpr const char *NVS_COLOR_KEY = "primary";
+constexpr const char *NVS_TAB_HEIGHT_KEY = "tabheight";
+constexpr const char *NVS_PERF_MONITOR_KEY = "showperf";
 constexpr bool DEFAULT_DARK_MODE = true;
 constexpr uint8_t DEFAULT_PRIMARY_COLOR = 0;
+constexpr uint16_t MIN_TAB_BAR_HEIGHT = 20;
+constexpr uint16_t MAX_TAB_BAR_HEIGHT = 50;
+constexpr bool DEFAULT_SHOW_PERFORMANCE_MONITOR = true;
 
 struct PrimaryColor {
   const char *name;
@@ -31,9 +38,15 @@ constexpr uint8_t PRIMARY_COLOR_COUNT =
 
 bool darkMode = DEFAULT_DARK_MODE;
 uint8_t selectedPrimaryColor = DEFAULT_PRIMARY_COLOR;
+uint16_t selectedTabBarHeight = APP_TAB_BAR_HEIGHT;
+bool performanceMonitorVisible = DEFAULT_SHOW_PERFORMANCE_MONITOR;
 
 bool isValidPrimaryColor(uint8_t index) {
   return index < PRIMARY_COLOR_COUNT;
+}
+
+bool isValidTabBarHeight(uint16_t height) {
+  return height >= MIN_TAB_BAR_HEIGHT && height <= MAX_TAB_BAR_HEIGHT;
 }
 
 void apply() {
@@ -72,6 +85,14 @@ bool savePrimaryColor() {
   preferences.end();
   return written > 0;
 }
+
+bool saveTabBarHeight() {
+  Preferences preferences;
+  if (!preferences.begin(NVS_NAMESPACE, false)) return false;
+  size_t written = preferences.putUShort(NVS_TAB_HEIGHT_KEY, selectedTabBarHeight);
+  preferences.end();
+  return written > 0;
+}
 }
 
 void begin() {
@@ -82,14 +103,27 @@ void begin() {
       NVS_COLOR_KEY,
       DEFAULT_PRIMARY_COLOR
     );
+    selectedTabBarHeight = preferences.getUShort(
+      NVS_TAB_HEIGHT_KEY,
+      APP_TAB_BAR_HEIGHT
+    );
+    performanceMonitorVisible = preferences.getBool(
+      NVS_PERF_MONITOR_KEY,
+      DEFAULT_SHOW_PERFORMANCE_MONITOR
+    );
     preferences.end();
   } else {
     darkMode = DEFAULT_DARK_MODE;
     selectedPrimaryColor = DEFAULT_PRIMARY_COLOR;
+    selectedTabBarHeight = APP_TAB_BAR_HEIGHT;
+    performanceMonitorVisible = DEFAULT_SHOW_PERFORMANCE_MONITOR;
   }
 
   if (!isValidPrimaryColor(selectedPrimaryColor)) {
     selectedPrimaryColor = DEFAULT_PRIMARY_COLOR;
+  }
+  if (!isValidTabBarHeight(selectedTabBarHeight)) {
+    selectedTabBarHeight = APP_TAB_BAR_HEIGHT;
   }
   apply();
 }
@@ -128,5 +162,42 @@ bool setPrimaryColor(uint8_t index) {
   selectedPrimaryColor = index;
   apply();
   return savePrimaryColor();
+}
+
+uint16_t tabBarHeight() {
+  return selectedTabBarHeight;
+}
+
+uint16_t tabBarMinHeight() {
+  return MIN_TAB_BAR_HEIGHT;
+}
+
+uint16_t tabBarMaxHeight() {
+  return MAX_TAB_BAR_HEIGHT;
+}
+
+bool setTabBarHeight(uint16_t height) {
+  if (!isValidTabBarHeight(height)) return false;
+  if (selectedTabBarHeight == height) return true;
+  selectedTabBarHeight = height;
+  return saveTabBarHeight();
+}
+
+bool showPerformanceMonitor() {
+  return performanceMonitorVisible;
+}
+
+bool setShowPerformanceMonitor(bool enabled) {
+  if (performanceMonitorVisible == enabled) return true;
+  performanceMonitorVisible = enabled;
+
+  Preferences preferences;
+  if (!preferences.begin(NVS_NAMESPACE, false)) return false;
+  size_t written = preferences.putBool(
+    NVS_PERF_MONITOR_KEY,
+    performanceMonitorVisible
+  );
+  preferences.end();
+  return written > 0;
 }
 }

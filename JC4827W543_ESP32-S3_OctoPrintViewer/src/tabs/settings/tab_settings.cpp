@@ -3,6 +3,7 @@
 #include <WiFi.h>
 
 #include "../../core/app_config.h"
+#include "../../core/app_navigation.h"
 #include "../../core/app_theme.h"
 #include "../../core/app_ui.h"
 #include "services/wifi_manager.h"
@@ -13,9 +14,23 @@
 
 namespace SettingsTab {
 namespace {
+enum class SettingsCategory : intptr_t {
+  APPEARANCE = 1,
+  WIFI
+};
+
+lv_obj_t *categoryLayer = nullptr;
+lv_obj_t *categoryTitle = nullptr;
+lv_obj_t *appearancePage = nullptr;
+lv_obj_t *wifiPage = nullptr;
+
 lv_obj_t *themeButton = nullptr;
 lv_obj_t *themeStatus = nullptr;
 lv_obj_t *primaryColorDropdown = nullptr;
+lv_obj_t *tabBarHeightSlider = nullptr;
+lv_obj_t *tabBarHeightValue = nullptr;
+lv_obj_t *performanceMonitorSwitch = nullptr;
+
 lv_obj_t *wifiStatus = nullptr;
 lv_obj_t *ipStatus = nullptr;
 lv_obj_t *wifiSavedCount = nullptr;
@@ -24,6 +39,7 @@ lv_obj_t *wifiDropdown = nullptr;
 lv_obj_t *wifiPassword = nullptr;
 lv_obj_t *wifiKeyboard = nullptr;
 lv_obj_t *wifiDialogStatus = nullptr;
+
 uint32_t displayedWifiScanGeneration = UINT32_MAX;
 WifiManager::State previousWifiState = WifiManager::State::IDLE;
 uint32_t lastNetworkUiMs = 0;
@@ -41,6 +57,35 @@ void updateAppearanceUi(bool saved = true) {
     }
   }
 
+  if (primaryColorDropdown != nullptr) {
+    lv_dropdown_set_selected(
+      primaryColorDropdown,
+      AppTheme::primaryColorIndex()
+    );
+  }
+
+  if (tabBarHeightSlider != nullptr) {
+    lv_slider_set_value(
+      tabBarHeightSlider,
+      AppTheme::tabBarHeight(),
+      LV_ANIM_OFF
+    );
+  }
+  if (tabBarHeightValue != nullptr) {
+    lv_label_set_text_fmt(
+      tabBarHeightValue,
+      "%u px",
+      AppTheme::tabBarHeight()
+    );
+  }
+  if (performanceMonitorSwitch != nullptr) {
+    if (AppTheme::showPerformanceMonitor()) {
+      lv_obj_add_state(performanceMonitorSwitch, LV_STATE_CHECKED);
+    } else {
+      lv_obj_clear_state(performanceMonitorSwitch, LV_STATE_CHECKED);
+    }
+  }
+
   if (themeStatus != nullptr) {
     if (!saved) {
       lv_label_set_text(themeStatus, "Tema aplicado, pero no se pudo guardar");
@@ -48,28 +93,27 @@ void updateAppearanceUi(bool saved = true) {
       lv_label_set_text_fmt(
         themeStatus,
         "Tema: %s / %s",
-        AppTheme::isDarkMode() ? "oscuro" : "claro",
+        AppTheme::isDarkMode() ? "Oscuro" : "Claro",
         AppTheme::primaryColorName(AppTheme::primaryColorIndex())
       );
     }
   }
 }
 
-void onThemeToggle(lv_event_t *event) {
-  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  updateAppearanceUi(AppTheme::toggle());
-}
-
-void onPrimaryColorChanged(lv_event_t *event) {
+void onPerformanceMonitorChanged(lv_event_t *event) {
   if (
     lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED ||
-    primaryColorDropdown == nullptr
+    performanceMonitorSwitch == nullptr
   ) {
     return;
   }
 
-  uint16_t selected = lv_dropdown_get_selected(primaryColorDropdown);
-  bool saved = AppTheme::setPrimaryColor(static_cast<uint8_t>(selected));
+  bool enabled = lv_obj_has_state(
+    performanceMonitorSwitch,
+    LV_STATE_CHECKED
+  );
+  bool saved = AppTheme::setShowPerformanceMonitor(enabled);
+  appApplyPerformanceMonitorVisibility();
   updateAppearanceUi(saved);
 }
 
@@ -93,6 +137,94 @@ void updateNetworkUi() {
       wifiManager.savedCount(),
       WifiManager::MAX_SAVED_NETWORKS
     );
+  }
+}
+
+void showCategory(SettingsCategory category) {
+  if (
+    categoryLayer == nullptr ||
+    categoryTitle == nullptr ||
+    appearancePage == nullptr ||
+    wifiPage == nullptr
+  ) {
+    return;
+  }
+
+  lv_obj_add_flag(appearancePage, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(wifiPage, LV_OBJ_FLAG_HIDDEN);
+
+  switch (category) {
+    case SettingsCategory::APPEARANCE:
+      lv_label_set_text(categoryTitle, "Ajustes de apariencia");
+      updateAppearanceUi();
+      lv_obj_clear_flag(appearancePage, LV_OBJ_FLAG_HIDDEN);
+      break;
+
+    case SettingsCategory::WIFI:
+      lv_label_set_text(categoryTitle, "Ajustes de WiFi");
+      updateNetworkUi();
+      lv_obj_clear_flag(wifiPage, LV_OBJ_FLAG_HIDDEN);
+      break;
+  }
+
+  lv_obj_clear_flag(categoryLayer, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(categoryLayer);
+}
+
+void onOpenCategory(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  SettingsCategory category = static_cast<SettingsCategory>(
+    reinterpret_cast<intptr_t>(lv_event_get_user_data(event))
+  );
+  showCategory(category);
+}
+
+void onCloseCategory(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED || categoryLayer == nullptr) return;
+  lv_obj_add_flag(categoryLayer, LV_OBJ_FLAG_HIDDEN);
+}
+
+void onThemeToggle(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  bool saved = AppTheme::toggle();
+  appApplyTabViewAppearance();
+  updateAppearanceUi(saved);
+}
+
+void onPrimaryColorChanged(lv_event_t *event) {
+  if (
+    lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED ||
+    primaryColorDropdown == nullptr
+  ) {
+    return;
+  }
+
+  uint16_t selected = lv_dropdown_get_selected(primaryColorDropdown);
+  bool saved = AppTheme::setPrimaryColor(static_cast<uint8_t>(selected));
+  appApplyTabViewAppearance();
+  updateAppearanceUi(saved);
+}
+
+void onTabBarHeightChanged(lv_event_t *event) {
+  if (tabBarHeightSlider == nullptr) return;
+
+  lv_event_code_t code = lv_event_get_code(event);
+  uint16_t height = static_cast<uint16_t>(
+    lv_slider_get_value(tabBarHeightSlider)
+  );
+
+  if (code == LV_EVENT_VALUE_CHANGED) {
+    if (tabBarHeightValue != nullptr) {
+      lv_label_set_text_fmt(tabBarHeightValue, "%u px", height);
+    }
+    appPreviewTabBarHeight(height);
+    return;
+  }
+
+  if (code == LV_EVENT_RELEASED) {
+    bool saved = AppTheme::setTabBarHeight(height);
+    appApplyTabViewAppearance();
+    updateAppearanceUi(saved);
   }
 }
 
@@ -228,36 +360,40 @@ void onForgetWifiClick(lv_event_t *event) {
     lv_label_set_text(wifiDialogStatus, "No se pudo olvidar la red");
   }
 }
-}
 
-void create(lv_obj_t *parent) {
-  lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
-  lv_obj_set_scroll_dir(parent, LV_DIR_VER);
-  lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_ACTIVE);
-  lv_obj_set_style_pad_bottom(parent, 30, LV_PART_MAIN);
+void createAppearancePage() {
+  appearancePage = lv_obj_create(categoryLayer);
+  lv_obj_set_pos(appearancePage, 0, 40);
+  lv_obj_set_size(appearancePage, 480, 232);
+  lv_obj_add_flag(appearancePage, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(appearancePage, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(appearancePage, LV_SCROLLBAR_MODE_ACTIVE);
+  lv_obj_set_style_border_width(appearancePage, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(appearancePage, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_bottom(appearancePage, 20, LV_PART_MAIN);
 
-  lv_obj_t *appearanceTitle = lv_label_create(parent);
-  lv_label_set_text(appearanceTitle, "Apariencia");
-  lv_obj_set_pos(appearanceTitle, 10, 5);
+  lv_obj_t *modeLabel = lv_label_create(appearancePage);
+  lv_label_set_text(modeLabel, "Modo de interfaz");
+  lv_obj_set_pos(modeLabel, 15, 15);
 
   themeButton = appCreateButton(
-    parent,
+    appearancePage,
     "",
-    10,
-    32,
+    15,
+    42,
     220,
-    40,
+    44,
     onThemeToggle
   );
 
-  themeStatus = lv_label_create(parent);
-  lv_obj_set_pos(themeStatus, 245, 38);
-  lv_obj_set_width(themeStatus, 220);
+  themeStatus = lv_label_create(appearancePage);
+  lv_obj_set_pos(themeStatus, 250, 48);
+  lv_obj_set_width(themeStatus, 215);
   lv_label_set_long_mode(themeStatus, LV_LABEL_LONG_WRAP);
 
-  lv_obj_t *primaryColorLabel = lv_label_create(parent);
+  lv_obj_t *primaryColorLabel = lv_label_create(appearancePage);
   lv_label_set_text(primaryColorLabel, "Color principal");
-  lv_obj_set_pos(primaryColorLabel, 10, 91);
+  lv_obj_set_pos(primaryColorLabel, 15, 115);
 
   String primaryColorOptions;
   for (uint8_t i = 0; i < AppTheme::primaryColorCount(); i++) {
@@ -265,14 +401,11 @@ void create(lv_obj_t *parent) {
     primaryColorOptions += AppTheme::primaryColorName(i);
   }
 
-  primaryColorDropdown = lv_dropdown_create(parent);
+  primaryColorDropdown = lv_dropdown_create(appearancePage);
   lv_dropdown_set_options(primaryColorDropdown, primaryColorOptions.c_str());
-  lv_dropdown_set_selected(
-    primaryColorDropdown,
-    AppTheme::primaryColorIndex()
-  );
-  lv_obj_set_pos(primaryColorDropdown, 135, 80);
-  lv_obj_set_size(primaryColorDropdown, 180, 40);
+  lv_dropdown_set_selected(primaryColorDropdown, AppTheme::primaryColorIndex());
+  lv_obj_set_pos(primaryColorDropdown, 140, 103);
+  lv_obj_set_size(primaryColorDropdown, 190, 42);
   lv_obj_add_event_cb(
     primaryColorDropdown,
     onPrimaryColorChanged,
@@ -280,37 +413,97 @@ void create(lv_obj_t *parent) {
     nullptr
   );
 
-  updateAppearanceUi();
+  lv_obj_t *tabBarHeightLabel = lv_label_create(appearancePage);
+  lv_label_set_text(tabBarHeightLabel, "Altura de la barra superior");
+  lv_obj_set_pos(tabBarHeightLabel, 15, 165);
 
-  constexpr lv_coord_t y = 135;
+  tabBarHeightValue = lv_label_create(appearancePage);
+  lv_obj_set_width(tabBarHeightValue, 70);
+  lv_obj_set_style_text_align(
+    tabBarHeightValue,
+    LV_TEXT_ALIGN_RIGHT,
+    LV_PART_MAIN
+  );
+  lv_obj_set_pos(tabBarHeightValue, 385, 165);
 
-  lv_obj_t *wifiTitle = lv_label_create(parent);
-  lv_label_set_text(wifiTitle, "Conexion WiFi");
-  lv_obj_set_pos(wifiTitle, 10, y + 5);
+  tabBarHeightSlider = lv_slider_create(appearancePage);
+  lv_slider_set_range(
+    tabBarHeightSlider,
+    AppTheme::tabBarMinHeight(),
+    AppTheme::tabBarMaxHeight()
+  );
+  lv_obj_set_pos(tabBarHeightSlider, 20, 198);
+  lv_obj_set_size(tabBarHeightSlider, 430, 20);
+  lv_obj_add_event_cb(
+    tabBarHeightSlider,
+    onTabBarHeightChanged,
+    LV_EVENT_ALL,
+    nullptr
+  );
 
-  appCreateButton(parent, "RECONECTAR", 10, y + 32, 150, 40, onReconnectClick);
-  appCreateButton(parent, "CONFIGURAR WIFI", 170, y + 32, 190, 40, onOpenWifiDialog);
+  lv_obj_t *hint = lv_label_create(appearancePage);
+  lv_label_set_text(
+    hint,
+    "El color se aplica a botones, sliders y tabs activas."
+  );
+  lv_obj_set_width(hint, 450);
+  lv_obj_set_pos(hint, 15, 240);
 
-  wifiStatus = lv_label_create(parent);
-  lv_obj_set_width(wifiStatus, 455);
-  lv_obj_set_pos(wifiStatus, 10, y + 85);
+  lv_obj_t *performanceLabel = lv_label_create(appearancePage);
+  lv_label_set_text(performanceLabel, "Mostrar FPS y CPU");
+  lv_obj_set_pos(performanceLabel, 15, 285);
 
-  ipStatus = lv_label_create(parent);
-  lv_obj_set_pos(ipStatus, 10, y + 112);
+  performanceMonitorSwitch = lv_switch_create(appearancePage);
+  lv_obj_set_pos(performanceMonitorSwitch, 190, 274);
+  lv_obj_set_size(performanceMonitorSwitch, 58, 34);
+  lv_obj_add_event_cb(
+    performanceMonitorSwitch,
+    onPerformanceMonitorChanged,
+    LV_EVENT_VALUE_CHANGED,
+    nullptr
+  );
 
-  wifiSavedCount = lv_label_create(parent);
-  lv_obj_set_pos(wifiSavedCount, 10, y + 139);
-
-  lv_obj_t *bottomSpacer = lv_obj_create(parent);
-  lv_obj_set_pos(bottomSpacer, 0, y + 175);
-  lv_obj_set_size(bottomSpacer, 1, 30);
+  lv_obj_t *bottomSpacer = lv_obj_create(appearancePage);
+  lv_obj_set_pos(bottomSpacer, 0, 330);
+  lv_obj_set_size(bottomSpacer, 1, 20);
   lv_obj_set_style_bg_opa(bottomSpacer, LV_OPA_TRANSP, LV_PART_MAIN);
   lv_obj_set_style_border_width(bottomSpacer, 0, LV_PART_MAIN);
 
-  updateNetworkUi();
+  updateAppearanceUi();
+  lv_obj_add_flag(appearancePage, LV_OBJ_FLAG_HIDDEN);
 }
 
-void createOverlay() {
+void createWifiPage() {
+  wifiPage = lv_obj_create(categoryLayer);
+  lv_obj_set_pos(wifiPage, 0, 40);
+  lv_obj_set_size(wifiPage, 480, 232);
+  lv_obj_clear_flag(wifiPage, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_border_width(wifiPage, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(wifiPage, 0, LV_PART_MAIN);
+
+  appCreateButton(wifiPage, "RECONECTAR", 15, 15, 150, 42, onReconnectClick);
+  appCreateButton(wifiPage, "CONFIGURAR WIFI", 180, 15, 190, 42, onOpenWifiDialog);
+
+  wifiStatus = lv_label_create(wifiPage);
+  lv_obj_set_width(wifiStatus, 450);
+  lv_obj_set_pos(wifiStatus, 15, 80);
+
+  ipStatus = lv_label_create(wifiPage);
+  lv_obj_set_pos(ipStatus, 15, 112);
+
+  wifiSavedCount = lv_label_create(wifiPage);
+  lv_obj_set_pos(wifiSavedCount, 15, 144);
+
+  lv_obj_t *hint = lv_label_create(wifiPage);
+  lv_label_set_text(hint, "Al arrancar se intenta conectar a la red guardada con mejor senal.");
+  lv_obj_set_width(hint, 450);
+  lv_obj_set_pos(hint, 15, 184);
+
+  updateNetworkUi();
+  lv_obj_add_flag(wifiPage, LV_OBJ_FLAG_HIDDEN);
+}
+
+void createWifiDialog() {
   wifiDialog = lv_obj_create(lv_layer_top());
   lv_obj_set_pos(wifiDialog, 0, 0);
   lv_obj_set_size(wifiDialog, 480, 272);
@@ -359,6 +552,65 @@ void createOverlay() {
   lv_obj_add_event_cb(wifiKeyboard, onWifiKeyboardEvent, LV_EVENT_ALL, nullptr);
   lv_obj_add_flag(wifiKeyboard, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(wifiDialog, LV_OBJ_FLAG_HIDDEN);
+}
+}
+
+void create(lv_obj_t *parent) {
+  lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_pad_all(parent, 0, LV_PART_MAIN);
+
+  lv_obj_t *title = lv_label_create(parent);
+  lv_label_set_text(title, "Categorias de ajustes");
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 12);
+
+  lv_obj_t *description = lv_label_create(parent);
+  lv_label_set_text(description, "Selecciona la seccion que quieres configurar");
+  lv_obj_set_width(description, 450);
+  lv_obj_set_style_text_align(description, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  lv_obj_align(description, LV_ALIGN_TOP_MID, 0, 42);
+
+  appCreateButton(
+    parent,
+    "APARIENCIA",
+    15,
+    82,
+    215,
+    72,
+    onOpenCategory,
+    reinterpret_cast<void *>(static_cast<intptr_t>(SettingsCategory::APPEARANCE))
+  );
+
+  appCreateButton(
+    parent,
+    "WIFI",
+    250,
+    82,
+    215,
+    72,
+    onOpenCategory,
+    reinterpret_cast<void *>(static_cast<intptr_t>(SettingsCategory::WIFI))
+  );
+}
+
+void createOverlay() {
+  categoryLayer = lv_obj_create(lv_layer_top());
+  lv_obj_set_pos(categoryLayer, 0, 0);
+  lv_obj_set_size(categoryLayer, 480, 272);
+  lv_obj_clear_flag(categoryLayer, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_border_width(categoryLayer, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(categoryLayer, 0, LV_PART_MAIN);
+
+  categoryTitle = lv_label_create(categoryLayer);
+  lv_label_set_text(categoryTitle, "Ajustes");
+  lv_obj_set_pos(categoryTitle, 12, 11);
+
+  appCreateButton(categoryLayer, "VOLVER", 390, 3, 80, 32, onCloseCategory);
+
+  createAppearancePage();
+  createWifiPage();
+  lv_obj_add_flag(categoryLayer, LV_OBJ_FLAG_HIDDEN);
+
+  createWifiDialog();
 }
 
 void beginWifi() {

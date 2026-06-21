@@ -8,6 +8,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <string.h>
+#include <stdlib.h>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -17,8 +18,9 @@
 
 namespace OctoPrintFeature {
 namespace {
-const char *SNAPSHOT_BASE_URL =
-  "http://192.168.25.60:30113/snapshot-lite.jpg";
+constexpr const char *SNAPSHOT_PATH = "/snapshot-lite.jpg";
+constexpr uint16_t DEFAULT_SNAPSHOT_PORT = 30113;
+constexpr size_t SNAPSHOT_IP_CAPACITY = 16;
 
 struct ResolutionPreset {
   uint16_t width;
@@ -40,6 +42,9 @@ constexpr float DEFAULT_ZOOM = 1.0f;
 constexpr float DEFAULT_X = 0.50f;
 constexpr float DEFAULT_Y = 0.50f;
 constexpr uint32_t DEFAULT_INTERVAL_MS = 1000;
+constexpr bool DEFAULT_SHOW_CAMERA_STATUS = true;
+constexpr bool DEFAULT_SHOW_REQUEST_PARAMS = true;
+constexpr uint8_t DEFAULT_OVERLAY_POSITION = 0;
 constexpr float MOVE_STEP = 0.05f;
 constexpr float ZOOM_STEP = 0.2f;
 constexpr uint16_t MAX_CAMERA_WIDTH = 480;
@@ -49,12 +54,15 @@ constexpr size_t CAMERA_BUFFER_BYTES =
 constexpr size_t MAX_JPEG_BYTES = 512 * 1024;
 
 struct SnapshotRequest {
+  char ip[SNAPSHOT_IP_CAPACITY];
+  uint16_t port;
   uint16_t width;
   uint16_t height;
   uint8_t quality;
   float zoom;
   float x;
   float y;
+  uint32_t cacheBust;
 };
 
 enum CameraAction : intptr_t {
@@ -77,6 +85,11 @@ enum ParameterType : intptr_t {
   PARAM_Y
 };
 
+enum class OverlayPosition : uint8_t {
+  BOTTOM = 0,
+  TOP = 1
+};
+
 Preferences preferences;
 uint8_t resolutionIndex = DEFAULT_RESOLUTION_INDEX;
 uint16_t cameraWidth = 368;
@@ -86,13 +99,21 @@ float cameraZoom = DEFAULT_ZOOM;
 float cameraX = DEFAULT_X;
 float cameraY = DEFAULT_Y;
 uint32_t snapshotIntervalMs = DEFAULT_INTERVAL_MS;
+char snapshotIp[SNAPSHOT_IP_CAPACITY] = "";
+uint16_t snapshotPort = DEFAULT_SNAPSHOT_PORT;
+bool showCameraStatus = DEFAULT_SHOW_CAMERA_STATUS;
+bool showRequestParams = DEFAULT_SHOW_REQUEST_PARAMS;
+OverlayPosition overlayPosition =
+  static_cast<OverlayPosition>(DEFAULT_OVERLAY_POSITION);
 
 lv_obj_t *cameraFrame = nullptr;
 lv_obj_t *cameraImage = nullptr;
 lv_obj_t *cameraStatus = nullptr;
+lv_obj_t *cameraRequestUrl = nullptr;
 lv_obj_t *fullscreenLayer = nullptr;
 lv_obj_t *fullscreenImage = nullptr;
 lv_obj_t *fullscreenStatus = nullptr;
+lv_obj_t *fullscreenRequestUrl = nullptr;
 lv_obj_t *cameraControls = nullptr;
 lv_obj_t *cameraValuesLabel = nullptr;
 lv_obj_t *parametersLayer = nullptr;
@@ -108,6 +129,12 @@ lv_obj_t *qualityValueLabel = nullptr;
 lv_obj_t *zoomValueLabel = nullptr;
 lv_obj_t *xValueLabel = nullptr;
 lv_obj_t *yValueLabel = nullptr;
+lv_obj_t *snapshotIpTextArea = nullptr;
+lv_obj_t *snapshotPortTextArea = nullptr;
+lv_obj_t *parametersKeyboard = nullptr;
+lv_obj_t *showCameraStatusSwitch = nullptr;
+lv_obj_t *showRequestParamsSwitch = nullptr;
+lv_obj_t *overlayPositionDropdown = nullptr;
 
 uint16_t *frameBuffers[2] = {nullptr, nullptr};
 uint8_t *jpegBytes = nullptr;
@@ -163,6 +190,44 @@ uint8_t intervalToDropdownIndex(uint32_t value) {
   }
 }
 
+bool isValidIpv4(const char *value) {
+  if (value == nullptr || value[0] == '\0') return false;
+
+  unsigned int octets[4];
+  char trailing;
+  if (
+    sscanf(
+      value,
+      "%u.%u.%u.%u%c",
+      &octets[0],
+      &octets[1],
+      &octets[2],
+      &octets[3],
+      &trailing
+    ) != 4
+  ) {
+    return false;
+  }
+
+  for (uint8_t i = 0; i < 4; i++) {
+    if (octets[i] > 255) return false;
+  }
+  return true;
+}
+
+bool parsePort(const char *value, uint16_t &port) {
+  if (value == nullptr || value[0] == '\0') return false;
+
+  char *end = nullptr;
+  unsigned long parsed = strtoul(value, &end, 10);
+  if (end == value || *end != '\0' || parsed == 0 || parsed > 65535) {
+    return false;
+  }
+
+  port = static_cast<uint16_t>(parsed);
+  return true;
+}
+
 void setLabelTextIfChanged(lv_obj_t *label, const char *text) {
   if (label == nullptr || text == nullptr) return;
   const char *currentText = lv_label_get_text(label);
@@ -173,6 +238,100 @@ void setLabelTextIfChanged(lv_obj_t *label, const char *text) {
 void setStatus(const char *text) {
   setLabelTextIfChanged(cameraStatus, text);
   setLabelTextIfChanged(fullscreenStatus, text);
+}
+
+void setRequestUrl(const char *url) {
+  setLabelTextIfChanged(cameraRequestUrl, url);
+  setLabelTextIfChanged(fullscreenRequestUrl, url);
+}
+
+void setObjectVisible(lv_obj_t *object, bool visible) {
+  if (object == nullptr) return;
+  if (visible) lv_obj_clear_flag(object, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
+}
+
+void applyOverlayVisibility() {
+  setObjectVisible(cameraStatus, showCameraStatus);
+  setObjectVisible(fullscreenStatus, showCameraStatus);
+  setObjectVisible(cameraRequestUrl, showRequestParams);
+  setObjectVisible(fullscreenRequestUrl, showRequestParams);
+
+  bool atTop = overlayPosition == OverlayPosition::TOP;
+  if (atTop) {
+    if (cameraStatus != nullptr) {
+      lv_obj_align(cameraStatus, LV_ALIGN_TOP_MID, 0, 2);
+    }
+    if (cameraRequestUrl != nullptr) {
+      lv_obj_align(
+        cameraRequestUrl,
+        LV_ALIGN_TOP_MID,
+        0,
+        showCameraStatus ? 22 : 2
+      );
+    }
+    if (fullscreenStatus != nullptr) {
+      lv_obj_set_width(fullscreenStatus, 390);
+      lv_obj_align(fullscreenStatus, LV_ALIGN_TOP_LEFT, 4, 4);
+    }
+    if (fullscreenRequestUrl != nullptr) {
+      lv_obj_set_width(fullscreenRequestUrl, 390);
+      lv_obj_align(
+        fullscreenRequestUrl,
+        LV_ALIGN_TOP_LEFT,
+        4,
+        showCameraStatus ? 24 : 4
+      );
+    }
+    return;
+  }
+
+  if (cameraStatus != nullptr) {
+    lv_obj_align(
+      cameraStatus,
+      LV_ALIGN_BOTTOM_MID,
+      0,
+      showRequestParams ? -22 : -2
+    );
+  }
+  if (cameraRequestUrl != nullptr) {
+    lv_obj_align(cameraRequestUrl, LV_ALIGN_BOTTOM_MID, 0, -2);
+  }
+  if (fullscreenStatus != nullptr) {
+    lv_obj_set_width(fullscreenStatus, 420);
+    lv_obj_align(
+      fullscreenStatus,
+      LV_ALIGN_BOTTOM_MID,
+      0,
+      showRequestParams ? -24 : -4
+    );
+  }
+  if (fullscreenRequestUrl != nullptr) {
+    lv_obj_set_width(fullscreenRequestUrl, 470);
+    lv_obj_align(fullscreenRequestUrl, LV_ALIGN_BOTTOM_MID, 0, -4);
+  }
+}
+
+void buildSnapshotUrl(
+  const SnapshotRequest &request,
+  char *url,
+  size_t urlCapacity
+) {
+  snprintf(
+    url,
+    urlCapacity,
+    "http://%s:%u%s?w=%u&h=%u&q=%u&zoom=%.1f&x=%.2f&y=%.2f&t=%lu",
+    request.ip,
+    request.port,
+    SNAPSHOT_PATH,
+    request.width,
+    request.height,
+    request.quality,
+    request.zoom,
+    request.x,
+    request.y,
+    static_cast<unsigned long>(request.cacheBust)
+  );
 }
 
 void setWorkerStatus(const char *text) {
@@ -208,6 +367,11 @@ void setDefaultSettings() {
   cameraX = DEFAULT_X;
   cameraY = DEFAULT_Y;
   snapshotIntervalMs = DEFAULT_INTERVAL_MS;
+  snapshotIp[0] = '\0';
+  snapshotPort = DEFAULT_SNAPSHOT_PORT;
+  showCameraStatus = DEFAULT_SHOW_CAMERA_STATUS;
+  showRequestParams = DEFAULT_SHOW_REQUEST_PARAMS;
+  overlayPosition = static_cast<OverlayPosition>(DEFAULT_OVERLAY_POSITION);
 }
 
 void loadSettings() {
@@ -223,7 +387,25 @@ void loadSettings() {
   cameraX = preferences.getFloat("x", DEFAULT_X);
   cameraY = preferences.getFloat("y", DEFAULT_Y);
   snapshotIntervalMs = preferences.getUInt("interval", DEFAULT_INTERVAL_MS);
+  String storedIp = preferences.getString("proxyip", "");
+  snapshotPort = preferences.getUShort("proxyport", DEFAULT_SNAPSHOT_PORT);
+  showCameraStatus = preferences.getBool("showstatus", DEFAULT_SHOW_CAMERA_STATUS);
+  showRequestParams = preferences.getBool("showparams", DEFAULT_SHOW_REQUEST_PARAMS);
+  uint8_t storedPosition = preferences.getUChar(
+    "labelpos",
+    DEFAULT_OVERLAY_POSITION
+  );
+  overlayPosition = storedPosition <= static_cast<uint8_t>(OverlayPosition::TOP)
+    ? static_cast<OverlayPosition>(storedPosition)
+    : static_cast<OverlayPosition>(DEFAULT_OVERLAY_POSITION);
   preferences.end();
+
+  storedIp.trim();
+  if (storedIp.length() < SNAPSHOT_IP_CAPACITY) {
+    storedIp.toCharArray(snapshotIp, SNAPSHOT_IP_CAPACITY);
+  } else {
+    snapshotIp[0] = '\0';
+  }
 
   if (resolutionIndex >= RESOLUTION_COUNT) resolutionIndex = DEFAULT_RESOLUTION_INDEX;
   jpegQuality = constrain(jpegQuality, 30, 95);
@@ -231,6 +413,8 @@ void loadSettings() {
   cameraX = isfinite(cameraX) ? clampFloat(cameraX, 0.0f, 1.0f) : DEFAULT_X;
   cameraY = isfinite(cameraY) ? clampFloat(cameraY, 0.0f, 1.0f) : DEFAULT_Y;
   snapshotIntervalMs = normalizeInterval(snapshotIntervalMs);
+  if (snapshotIp[0] != '\0' && !isValidIpv4(snapshotIp)) snapshotIp[0] = '\0';
+  if (snapshotPort == 0) snapshotPort = DEFAULT_SNAPSHOT_PORT;
   cameraWidth = RESOLUTIONS[resolutionIndex].width;
   cameraHeight = RESOLUTIONS[resolutionIndex].height;
 }
@@ -245,6 +429,18 @@ bool saveSettings() {
   ok &= preferences.putFloat("x", cameraX) > 0;
   ok &= preferences.putFloat("y", cameraY) > 0;
   ok &= preferences.putUInt("interval", snapshotIntervalMs) > 0;
+  if (snapshotIp[0] == '\0') {
+    if (preferences.isKey("proxyip")) ok &= preferences.remove("proxyip");
+  } else {
+    ok &= preferences.putString("proxyip", snapshotIp) > 0;
+  }
+  ok &= preferences.putUShort("proxyport", snapshotPort) > 0;
+  ok &= preferences.putBool("showstatus", showCameraStatus) > 0;
+  ok &= preferences.putBool("showparams", showRequestParams) > 0;
+  ok &= preferences.putUChar(
+    "labelpos",
+    static_cast<uint8_t>(overlayPosition)
+  ) > 0;
   preferences.end();
   return ok;
 }
@@ -271,7 +467,55 @@ void updateParameterLabels() {
   updateCameraValuesLabel();
 }
 
+void syncEndpointControls() {
+  if (snapshotIpTextArea != nullptr) {
+    lv_textarea_set_text(snapshotIpTextArea, snapshotIp);
+  }
+  if (snapshotPortTextArea != nullptr) {
+    char portText[6];
+    snprintf(portText, sizeof(portText), "%u", snapshotPort);
+    lv_textarea_set_text(snapshotPortTextArea, portText);
+  }
+}
+
+bool readEndpointControls() {
+  if (snapshotIpTextArea == nullptr || snapshotPortTextArea == nullptr) return false;
+
+  const char *ipText = lv_textarea_get_text(snapshotIpTextArea);
+  const char *portText = lv_textarea_get_text(snapshotPortTextArea);
+  uint16_t parsedPort;
+
+  if (ipText[0] != '\0' && !isValidIpv4(ipText)) {
+    lv_label_set_text(savedStatus, "IP invalida. Ejemplo: 192.168.1.10");
+    return false;
+  }
+  if (!parsePort(portText, parsedPort)) {
+    lv_label_set_text(savedStatus, "Puerto invalido. Usa un valor entre 1 y 65535");
+    return false;
+  }
+
+  snprintf(snapshotIp, sizeof(snapshotIp), "%s", ipText);
+  snapshotPort = parsedPort;
+  return true;
+}
+
 void syncParameterControls() {
+  if (showCameraStatusSwitch != nullptr) {
+    if (showCameraStatus) lv_obj_add_state(showCameraStatusSwitch, LV_STATE_CHECKED);
+    else lv_obj_clear_state(showCameraStatusSwitch, LV_STATE_CHECKED);
+  }
+  if (showRequestParamsSwitch != nullptr) {
+    if (showRequestParams) lv_obj_add_state(showRequestParamsSwitch, LV_STATE_CHECKED);
+    else lv_obj_clear_state(showRequestParamsSwitch, LV_STATE_CHECKED);
+  }
+  if (overlayPositionDropdown != nullptr) {
+    lv_dropdown_set_selected(
+      overlayPositionDropdown,
+      static_cast<uint8_t>(overlayPosition)
+    );
+  }
+  applyOverlayVisibility();
+
   if (resolutionDropdown != nullptr) lv_dropdown_set_selected(resolutionDropdown, resolutionIndex);
   if (intervalDropdown != nullptr) {
     lv_dropdown_set_selected(intervalDropdown, intervalToDropdownIndex(snapshotIntervalMs));
@@ -368,7 +612,15 @@ void onFullscreenExit(lv_event_t *event) {
   if (lv_event_get_code(event) == LV_EVENT_CLICKED) exitFullscreen();
 }
 
+void hideParametersKeyboard() {
+  if (parametersKeyboard == nullptr) return;
+  lv_obj_add_flag(parametersKeyboard, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_t *textArea = lv_keyboard_get_textarea(parametersKeyboard);
+  if (textArea != nullptr) lv_obj_clear_state(textArea, LV_STATE_FOCUSED);
+}
+
 void hideParameterScreen() {
+  hideParametersKeyboard();
   if (parametersLayer != nullptr) {
     lv_obj_add_flag(parametersLayer, LV_OBJ_FLAG_HIDDEN);
   }
@@ -397,9 +649,49 @@ void onViewCamera(lv_event_t *event) {
   forceSnapshot = true;
 }
 
+void onEndpointTextEvent(lv_event_t *event) {
+  lv_event_code_t code = lv_event_get_code(event);
+  lv_obj_t *textArea = lv_event_get_target(event);
+
+  if (code == LV_EVENT_VALUE_CHANGED) {
+    markSettingsDirty();
+    return;
+  }
+
+  if (
+    (code == LV_EVENT_FOCUSED || code == LV_EVENT_CLICKED) &&
+    parametersKeyboard != nullptr
+  ) {
+    lv_keyboard_set_mode(parametersKeyboard, LV_KEYBOARD_MODE_NUMBER);
+    lv_keyboard_set_textarea(parametersKeyboard, textArea);
+    lv_obj_clear_flag(parametersKeyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(parametersKeyboard);
+    if (parametersContent != nullptr) {
+      lv_obj_scroll_to_y(parametersContent, 0, LV_ANIM_OFF);
+    }
+  }
+}
+
+void onParametersKeyboardEvent(lv_event_t *event) {
+  lv_event_code_t code = lv_event_get_code(event);
+  if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
+    hideParametersKeyboard();
+  }
+}
+
 void onSaveSettings(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
-  lv_label_set_text(savedStatus, saveSettings() ? "Valores guardados" : "Error al guardar");
+  if (!readEndpointControls()) return;
+
+  bool saved = saveSettings();
+  lv_label_set_text(savedStatus, saved ? "Valores guardados" : "Error al guardar");
+  if (snapshotIp[0] == '\0') {
+    setRequestUrl("");
+    setStatus("Configura la IP del proxy en PARAMETROS");
+  } else {
+    setStatus("Aplicando parametros...");
+    forceSnapshot = true;
+  }
 }
 
 void onCameraControl(lv_event_t *event) {
@@ -467,6 +759,35 @@ void onIntervalChanged(lv_event_t *event) {
   forceSnapshot = true;
 }
 
+void onVisibilityOptionChanged(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+
+  lv_obj_t *target = lv_event_get_target(event);
+  bool enabled = lv_obj_has_state(target, LV_STATE_CHECKED);
+  if (target == showCameraStatusSwitch) showCameraStatus = enabled;
+  else if (target == showRequestParamsSwitch) showRequestParams = enabled;
+  else return;
+
+  applyOverlayVisibility();
+  markSettingsDirty();
+}
+
+void onOverlayPositionChanged(lv_event_t *event) {
+  if (
+    lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED ||
+    overlayPositionDropdown == nullptr
+  ) {
+    return;
+  }
+
+  uint16_t selected = lv_dropdown_get_selected(overlayPositionDropdown);
+  overlayPosition = selected == static_cast<uint8_t>(OverlayPosition::TOP)
+    ? OverlayPosition::TOP
+    : OverlayPosition::BOTTOM;
+  applyOverlayVisibility();
+  markSettingsDirty();
+}
+
 void onParameterSlider(lv_event_t *event) {
   lv_event_code_t code = lv_event_get_code(event);
   ParameterType type = static_cast<ParameterType>(
@@ -493,6 +814,8 @@ void onParameterSlider(lv_event_t *event) {
 void onResetParameters(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
   setDefaultSettings();
+  setRequestUrl("");
+  syncEndpointControls();
   syncParameterControls();
   lv_label_set_text(
     savedStatus,
@@ -568,7 +891,8 @@ int drawJpegBlock(JPEGDRAW *draw) {
 }
 
 bool isValidSnapshotRequest(const SnapshotRequest &request) {
-  return request.width > 0 && request.width <= MAX_CAMERA_WIDTH &&
+  return isValidIpv4(request.ip) && request.port > 0 &&
+    request.width > 0 && request.width <= MAX_CAMERA_WIDTH &&
     request.height > 0 && request.height <= MAX_CAMERA_HEIGHT &&
     request.quality >= 30 && request.quality <= 95 &&
     isfinite(request.zoom) && request.zoom >= 1.0f && request.zoom <= 5.0f &&
@@ -578,24 +902,36 @@ bool isValidSnapshotRequest(const SnapshotRequest &request) {
 
 bool queueSnapshotRequest() {
   if (snapshotTaskHandle == nullptr || WiFi.status() != WL_CONNECTED) return false;
+  if (snapshotIp[0] == '\0') {
+    setStatus("Configura la IP del proxy en PARAMETROS");
+    return false;
+  }
+
+  SnapshotRequest request = {};
+  snprintf(request.ip, sizeof(request.ip), "%s", snapshotIp);
+  request.port = snapshotPort;
+  request.width = cameraWidth;
+  request.height = cameraHeight;
+  request.quality = jpegQuality;
+  request.zoom = cameraZoom;
+  request.x = cameraX;
+  request.y = cameraY;
+  request.cacheBust = millis();
 
   bool queued = false;
   portENTER_CRITICAL(&stateMux);
   if (!downloadBusy && !frameReady) {
-    pendingRequest = {
-      cameraWidth,
-      cameraHeight,
-      jpegQuality,
-      cameraZoom,
-      cameraX,
-      cameraY
-    };
+    pendingRequest = request;
     downloadBusy = true;
     queued = true;
   }
   portEXIT_CRITICAL(&stateMux);
 
   if (queued) {
+    char requestUrl[320];
+    buildSnapshotUrl(request, requestUrl, sizeof(requestUrl));
+    const char *parameters = strchr(requestUrl, '?');
+    setRequestUrl(parameters != nullptr ? parameters : "");
     xTaskNotifyGive(snapshotTaskHandle);
   }
   return queued;
@@ -665,19 +1001,7 @@ bool downloadAndDecodeSnapshot(const SnapshotRequest &request, int targetBufferI
   }
 
   char url[320];
-  snprintf(
-    url,
-    sizeof(url),
-    "%s?w=%u&h=%u&q=%u&zoom=%.1f&x=%.2f&y=%.2f&t=%lu",
-    SNAPSHOT_BASE_URL,
-    request.width,
-    request.height,
-    request.quality,
-    request.zoom,
-    request.x,
-    request.y,
-    static_cast<unsigned long>(millis())
-  );
+  buildSnapshotUrl(request, url, sizeof(url));
   Serial.println(url);
 
   WiFiClient client;
@@ -853,34 +1177,77 @@ void createTab(lv_obj_t *parent) {
   setReadableText(cameraStatus);
   lv_obj_set_style_bg_color(cameraStatus, lv_color_black(), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(cameraStatus, LV_OPA_70, LV_PART_MAIN);
-  lv_obj_align(cameraStatus, LV_ALIGN_BOTTOM_MID, 0, -2);
+  lv_obj_align(cameraStatus, LV_ALIGN_BOTTOM_MID, 0, -22);
+
+  cameraRequestUrl = lv_label_create(parent);
+  lv_label_set_text(cameraRequestUrl, "");
+  lv_obj_set_width(cameraRequestUrl, 470);
+  lv_label_set_long_mode(cameraRequestUrl, LV_LABEL_LONG_SCROLL_CIRCULAR);
+  lv_obj_set_style_text_align(cameraRequestUrl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  setReadableText(cameraRequestUrl);
+  lv_obj_set_style_text_opa(cameraRequestUrl, LV_OPA_70, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(cameraRequestUrl, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(cameraRequestUrl, LV_OPA_70, LV_PART_MAIN);
+  lv_obj_align(cameraRequestUrl, LV_ALIGN_BOTTOM_MID, 0, -2);
 }
 
 lv_coord_t createSettingsSection(lv_obj_t *parent, lv_coord_t startY) {
+  lv_obj_t *proxyTitle = lv_label_create(parent);
+  lv_label_set_text(proxyTitle, "Conexion del proxy");
+  lv_obj_set_pos(proxyTitle, 160, startY + 5);
+  setReadableText(proxyTitle);
+
+  lv_obj_t *ipLabel = lv_label_create(parent);
+  lv_label_set_text(ipLabel, "IP");
+  lv_obj_set_pos(ipLabel, 10, startY + 43);
+  setReadableText(ipLabel);
+
+  snapshotIpTextArea = lv_textarea_create(parent);
+  lv_textarea_set_one_line(snapshotIpTextArea, true);
+  lv_textarea_set_max_length(snapshotIpTextArea, SNAPSHOT_IP_CAPACITY - 1);
+  lv_textarea_set_accepted_chars(snapshotIpTextArea, "0123456789.");
+  lv_textarea_set_placeholder_text(snapshotIpTextArea, "192.168.1.10");
+  lv_obj_set_pos(snapshotIpTextArea, 45, startY + 32);
+  lv_obj_set_size(snapshotIpTextArea, 225, 40);
+  lv_obj_add_event_cb(snapshotIpTextArea, onEndpointTextEvent, LV_EVENT_ALL, nullptr);
+
+  lv_obj_t *portLabel = lv_label_create(parent);
+  lv_label_set_text(portLabel, "Puerto");
+  lv_obj_set_pos(portLabel, 285, startY + 43);
+  setReadableText(portLabel);
+
+  snapshotPortTextArea = lv_textarea_create(parent);
+  lv_textarea_set_one_line(snapshotPortTextArea, true);
+  lv_textarea_set_max_length(snapshotPortTextArea, 5);
+  lv_textarea_set_accepted_chars(snapshotPortTextArea, "0123456789");
+  lv_obj_set_pos(snapshotPortTextArea, 350, startY + 32);
+  lv_obj_set_size(snapshotPortTextArea, 100, 40);
+  lv_obj_add_event_cb(snapshotPortTextArea, onEndpointTextEvent, LV_EVENT_ALL, nullptr);
+
   lv_obj_t *title = lv_label_create(parent);
   lv_label_set_text(title, "Parametros del snapshot");
-  lv_obj_set_pos(title, 130, startY + 5);
+  lv_obj_set_pos(title, 130, startY + 95);
   setReadableText(title);
 
   lv_obj_t *resolutionLabel = lv_label_create(parent);
   lv_label_set_text(resolutionLabel, "Resolucion");
-  lv_obj_set_pos(resolutionLabel, 10, startY + 42);
+  lv_obj_set_pos(resolutionLabel, 10, startY + 132);
   setReadableText(resolutionLabel);
 
   resolutionDropdown = lv_dropdown_create(parent);
   lv_dropdown_set_options(resolutionDropdown, "320 x 180\n368 x 207\n480 x 270\n480 x 272");
-  lv_obj_set_pos(resolutionDropdown, 100, startY + 32);
+  lv_obj_set_pos(resolutionDropdown, 100, startY + 122);
   lv_obj_set_size(resolutionDropdown, 125, 40);
   lv_obj_add_event_cb(resolutionDropdown, onResolutionChanged, LV_EVENT_VALUE_CHANGED, nullptr);
 
   lv_obj_t *intervalLabel = lv_label_create(parent);
   lv_label_set_text(intervalLabel, "Refresco");
-  lv_obj_set_pos(intervalLabel, 245, startY + 42);
+  lv_obj_set_pos(intervalLabel, 245, startY + 132);
   setReadableText(intervalLabel);
 
   intervalDropdown = lv_dropdown_create(parent);
   lv_dropdown_set_options(intervalDropdown, "0.5 s\n1 s\n2 s\n5 s");
-  lv_obj_set_pos(intervalDropdown, 320, startY + 32);
+  lv_obj_set_pos(intervalDropdown, 320, startY + 122);
   lv_obj_set_size(intervalDropdown, 120, 40);
   lv_obj_add_event_cb(intervalDropdown, onIntervalChanged, LV_EVENT_VALUE_CHANGED, nullptr);
 
@@ -892,7 +1259,7 @@ lv_coord_t createSettingsSection(lv_obj_t *parent, lv_coord_t startY) {
   int maximums[] = {95, 50, 100, 100};
 
   for (uint8_t i = 0; i < 4; i++) {
-    lv_coord_t y = startY + 92 + (i * 45);
+    lv_coord_t y = startY + 182 + (i * 45);
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, names[i]);
     lv_obj_set_pos(label, 10, y);
@@ -914,19 +1281,74 @@ lv_coord_t createSettingsSection(lv_obj_t *parent, lv_coord_t startY) {
     );
   }
 
-  appCreateButton(parent, "VER CAMARA", 10, startY + 275, 135, 40, onViewCamera);
-  appCreateButton(parent, "GUARDAR", 155, startY + 275, 115, 40, onSaveSettings);
-  appCreateButton(parent, "RESET", 280, startY + 275, 80, 40, onResetParameters);
+  lv_obj_t *showStatusLabel = lv_label_create(parent);
+  lv_label_set_text(showStatusLabel, "Mostrar estado");
+  lv_obj_set_pos(showStatusLabel, 10, startY + 370);
+  setReadableText(showStatusLabel);
+
+  showCameraStatusSwitch = lv_switch_create(parent);
+  lv_obj_set_pos(showCameraStatusSwitch, 125, startY + 360);
+  lv_obj_set_size(showCameraStatusSwitch, 55, 32);
+  lv_obj_add_event_cb(
+    showCameraStatusSwitch,
+    onVisibilityOptionChanged,
+    LV_EVENT_VALUE_CHANGED,
+    nullptr
+  );
+
+  lv_obj_t *showParamsLabel = lv_label_create(parent);
+  lv_label_set_text(showParamsLabel, "Mostrar parametros");
+  lv_obj_set_pos(showParamsLabel, 220, startY + 370);
+  setReadableText(showParamsLabel);
+
+  showRequestParamsSwitch = lv_switch_create(parent);
+  lv_obj_set_pos(showRequestParamsSwitch, 380, startY + 360);
+  lv_obj_set_size(showRequestParamsSwitch, 55, 32);
+  lv_obj_add_event_cb(
+    showRequestParamsSwitch,
+    onVisibilityOptionChanged,
+    LV_EVENT_VALUE_CHANGED,
+    nullptr
+  );
+
+  lv_obj_t *positionLabel = lv_label_create(parent);
+  lv_label_set_text(positionLabel, "Posicion de textos");
+  lv_obj_set_pos(positionLabel, 10, startY + 420);
+  setReadableText(positionLabel);
+
+  overlayPositionDropdown = lv_dropdown_create(parent);
+  lv_dropdown_set_options(overlayPositionDropdown, "Inferior\nSuperior");
+  lv_obj_set_pos(overlayPositionDropdown, 170, startY + 408);
+  lv_obj_set_size(overlayPositionDropdown, 170, 42);
+  lv_obj_add_event_cb(
+    overlayPositionDropdown,
+    onOverlayPositionChanged,
+    LV_EVENT_VALUE_CHANGED,
+    nullptr
+  );
+
+  appCreateButton(parent, "VER CAMARA", 10, startY + 475, 135, 40, onViewCamera);
+  appCreateButton(parent, "GUARDAR", 155, startY + 475, 115, 40, onSaveSettings);
+  appCreateButton(parent, "RESET", 280, startY + 475, 80, 40, onResetParameters);
 
   savedStatus = lv_label_create(parent);
   lv_label_set_text(savedStatus, "Valores cargados");
-  lv_obj_set_pos(savedStatus, 10, startY + 327);
+  lv_obj_set_width(savedStatus, 450);
+  lv_label_set_long_mode(savedStatus, LV_LABEL_LONG_WRAP);
+  lv_obj_set_pos(savedStatus, 10, startY + 527);
   setReadableText(savedStatus);
 
-  syncParameterControls();
-  return startY + 365;
-}
+  lv_obj_t *bottomSpacer = lv_obj_create(parent);
+  lv_obj_set_pos(bottomSpacer, 0, startY + 580);
+  lv_obj_set_size(bottomSpacer, 1, 25);
+  lv_obj_set_style_bg_opa(bottomSpacer, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(bottomSpacer, 0, LV_PART_MAIN);
 
+  syncEndpointControls();
+  syncParameterControls();
+  lv_label_set_text(savedStatus, "Valores cargados");
+  return startY + 610;
+}
 void createOverlays() {
   fullscreenLayer = lv_obj_create(lv_layer_top());
   lv_obj_set_pos(fullscreenLayer, 0, 0);
@@ -948,7 +1370,18 @@ void createOverlays() {
   setReadableText(fullscreenStatus);
   lv_obj_set_style_bg_color(fullscreenStatus, lv_color_black(), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(fullscreenStatus, LV_OPA_50, LV_PART_MAIN);
-  lv_obj_align(fullscreenStatus, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_align(fullscreenStatus, LV_ALIGN_BOTTOM_MID, 0, -24);
+
+  fullscreenRequestUrl = lv_label_create(fullscreenLayer);
+  lv_label_set_text(fullscreenRequestUrl, "");
+  lv_obj_set_width(fullscreenRequestUrl, 470);
+  lv_label_set_long_mode(fullscreenRequestUrl, LV_LABEL_LONG_SCROLL_CIRCULAR);
+  lv_obj_set_style_text_align(fullscreenRequestUrl, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  setReadableText(fullscreenRequestUrl);
+  lv_obj_set_style_text_opa(fullscreenRequestUrl, LV_OPA_70, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(fullscreenRequestUrl, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(fullscreenRequestUrl, LV_OPA_50, LV_PART_MAIN);
+  lv_obj_align(fullscreenRequestUrl, LV_ALIGN_BOTTOM_MID, 0, -4);
 
   lv_obj_t *exitButton = appCreateButton(
     fullscreenLayer, "SALIR", 414, 5, 60, 34, onFullscreenExit
@@ -1028,6 +1461,18 @@ void createOverlays() {
   lv_obj_set_style_pad_bottom(parametersContent, 25, LV_PART_MAIN);
 
   createSettingsSection(parametersContent, 0);
+
+  parametersKeyboard = lv_keyboard_create(parametersLayer);
+  lv_keyboard_set_mode(parametersKeyboard, LV_KEYBOARD_MODE_NUMBER);
+  lv_obj_set_size(parametersKeyboard, 480, 146);
+  lv_obj_align(parametersKeyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
+  lv_obj_add_event_cb(
+    parametersKeyboard,
+    onParametersKeyboardEvent,
+    LV_EVENT_ALL,
+    nullptr
+  );
+  lv_obj_add_flag(parametersKeyboard, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(parametersLayer, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -1036,6 +1481,12 @@ void loop(bool tabActive) {
   applyPendingFrame();
 
   bool shouldUpdate = tabActive || fullscreenActive;
+  if (shouldUpdate && snapshotIp[0] == '\0') {
+    setStatus("Configura la IP del proxy en PARAMETROS");
+    forceSnapshot = false;
+    return;
+  }
+
   bool intervalElapsed = millis() - lastSnapshotMs >= snapshotIntervalMs;
   if (shouldUpdate && (forceSnapshot || intervalElapsed)) {
     if (queueSnapshotRequest()) {
