@@ -12,11 +12,17 @@ constexpr const char *NVS_DARK_KEY = "dark";
 constexpr const char *NVS_COLOR_KEY = "primary";
 constexpr const char *NVS_TAB_HEIGHT_KEY = "tabheight";
 constexpr const char *NVS_PERF_MONITOR_KEY = "showperf";
+constexpr const char *NVS_COUNTER_TAB_KEY = "tabcounter";
+constexpr const char *NVS_DOMOTICA_TAB_KEY = "tabdomotica";
+constexpr const char *NVS_OCTOPRINT_TAB_KEY = "taboctoprint";
 constexpr bool DEFAULT_DARK_MODE = true;
 constexpr uint8_t DEFAULT_PRIMARY_COLOR = 0;
 constexpr uint16_t MIN_TAB_BAR_HEIGHT = 20;
 constexpr uint16_t MAX_TAB_BAR_HEIGHT = 50;
 constexpr bool DEFAULT_SHOW_PERFORMANCE_MONITOR = true;
+constexpr bool DEFAULT_SHOW_COUNTER_TAB = false;
+constexpr bool DEFAULT_SHOW_DOMOTICA_TAB = true;
+constexpr bool DEFAULT_SHOW_OCTOPRINT_TAB = true;
 
 struct PrimaryColor {
   const char *name;
@@ -40,6 +46,9 @@ bool darkMode = DEFAULT_DARK_MODE;
 uint8_t selectedPrimaryColor = DEFAULT_PRIMARY_COLOR;
 uint16_t selectedTabBarHeight = APP_TAB_BAR_HEIGHT;
 bool performanceMonitorVisible = DEFAULT_SHOW_PERFORMANCE_MONITOR;
+bool counterTabVisible = DEFAULT_SHOW_COUNTER_TAB;
+bool domoticaTabVisible = DEFAULT_SHOW_DOMOTICA_TAB;
+bool octoPrintTabVisible = DEFAULT_SHOW_OCTOPRINT_TAB;
 
 bool isValidPrimaryColor(uint8_t index) {
   return index < PRIMARY_COLOR_COUNT;
@@ -111,12 +120,27 @@ void begin() {
       NVS_PERF_MONITOR_KEY,
       DEFAULT_SHOW_PERFORMANCE_MONITOR
     );
+    counterTabVisible = preferences.getBool(
+      NVS_COUNTER_TAB_KEY,
+      DEFAULT_SHOW_COUNTER_TAB
+    );
+    domoticaTabVisible = preferences.getBool(
+      NVS_DOMOTICA_TAB_KEY,
+      DEFAULT_SHOW_DOMOTICA_TAB
+    );
+    octoPrintTabVisible = preferences.getBool(
+      NVS_OCTOPRINT_TAB_KEY,
+      DEFAULT_SHOW_OCTOPRINT_TAB
+    );
     preferences.end();
   } else {
     darkMode = DEFAULT_DARK_MODE;
     selectedPrimaryColor = DEFAULT_PRIMARY_COLOR;
     selectedTabBarHeight = APP_TAB_BAR_HEIGHT;
     performanceMonitorVisible = DEFAULT_SHOW_PERFORMANCE_MONITOR;
+    counterTabVisible = DEFAULT_SHOW_COUNTER_TAB;
+    domoticaTabVisible = DEFAULT_SHOW_DOMOTICA_TAB;
+    octoPrintTabVisible = DEFAULT_SHOW_OCTOPRINT_TAB;
   }
 
   if (!isValidPrimaryColor(selectedPrimaryColor)) {
@@ -187,17 +211,47 @@ bool showPerformanceMonitor() {
   return performanceMonitorVisible;
 }
 
+bool saveVisibility(const char *key, bool value) {
+  Preferences preferences;
+  if (!preferences.begin(NVS_NAMESPACE, false)) return false;
+  size_t written = preferences.putBool(key, value);
+  preferences.end();
+  return written > 0;
+}
+
 bool setShowPerformanceMonitor(bool enabled) {
   if (performanceMonitorVisible == enabled) return true;
   performanceMonitorVisible = enabled;
+  return saveVisibility(NVS_PERF_MONITOR_KEY, performanceMonitorVisible);
+}
 
-  Preferences preferences;
-  if (!preferences.begin(NVS_NAMESPACE, false)) return false;
-  size_t written = preferences.putBool(
-    NVS_PERF_MONITOR_KEY,
-    performanceMonitorVisible
-  );
-  preferences.end();
-  return written > 0;
+bool showCounterTab() {
+  return counterTabVisible;
+}
+
+bool setShowCounterTab(bool enabled) {
+  if (counterTabVisible == enabled) return true;
+  counterTabVisible = enabled;
+  return saveVisibility(NVS_COUNTER_TAB_KEY, counterTabVisible);
+}
+
+bool showDomoticaTab() {
+  return domoticaTabVisible;
+}
+
+bool setShowDomoticaTab(bool enabled) {
+  if (domoticaTabVisible == enabled) return true;
+  domoticaTabVisible = enabled;
+  return saveVisibility(NVS_DOMOTICA_TAB_KEY, domoticaTabVisible);
+}
+
+bool showOctoPrintTab() {
+  return octoPrintTabVisible;
+}
+
+bool setShowOctoPrintTab(bool enabled) {
+  if (octoPrintTabVisible == enabled) return true;
+  octoPrintTabVisible = enabled;
+  return saveVisibility(NVS_OCTOPRINT_TAB_KEY, octoPrintTabVisible);
 }
 }

@@ -972,11 +972,11 @@ void applyPendingFrame() {
   cameraDescriptor.header.h = newHeight;
   cameraDescriptor.data_size = newWidth * newHeight * sizeof(uint16_t);
   cameraDescriptor.data = reinterpret_cast<const uint8_t *>(frameBuffers[newFrontIndex]);
-  lv_img_set_src(cameraImage, &cameraDescriptor);
-  lv_img_set_src(fullscreenImage, &cameraDescriptor);
+  if (cameraImage != nullptr) lv_img_set_src(cameraImage, &cameraDescriptor);
+  if (fullscreenImage != nullptr) lv_img_set_src(fullscreenImage, &cameraDescriptor);
   updateImageLayout();
-  lv_obj_invalidate(cameraImage);
-  lv_obj_invalidate(fullscreenImage);
+  if (cameraImage != nullptr) lv_obj_invalidate(cameraImage);
+  if (fullscreenImage != nullptr) lv_obj_invalidate(fullscreenImage);
 
   portENTER_CRITICAL(&stateMux);
   frontBufferIndex = newFrontIndex;
@@ -1149,6 +1149,13 @@ void startWorker() {
     setStatus("No se pudo crear la tarea de camara");
     Serial.println("No se pudo crear snapshotTask");
   }
+}
+
+void detachTabUi() {
+  cameraFrame = nullptr;
+  cameraImage = nullptr;
+  cameraStatus = nullptr;
+  cameraRequestUrl = nullptr;
 }
 
 void createTab(lv_obj_t *parent) {
@@ -1474,6 +1481,11 @@ void createOverlays() {
   );
   lv_obj_add_flag(parametersKeyboard, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(parametersLayer, LV_OBJ_FLAG_HIDDEN);
+}
+
+void showSettings() {
+  exitFullscreen();
+  showParameterScreen();
 }
 
 void loop(bool tabActive) {

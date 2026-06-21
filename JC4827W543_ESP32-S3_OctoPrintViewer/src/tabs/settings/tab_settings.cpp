@@ -16,7 +16,8 @@ namespace SettingsTab {
 namespace {
 enum class SettingsCategory : intptr_t {
   APPEARANCE = 1,
-  WIFI
+  WIFI,
+  OCTOPRINT
 };
 
 lv_obj_t *categoryLayer = nullptr;
@@ -30,6 +31,9 @@ lv_obj_t *primaryColorDropdown = nullptr;
 lv_obj_t *tabBarHeightSlider = nullptr;
 lv_obj_t *tabBarHeightValue = nullptr;
 lv_obj_t *performanceMonitorSwitch = nullptr;
+lv_obj_t *counterTabSwitch = nullptr;
+lv_obj_t *domoticaTabSwitch = nullptr;
+lv_obj_t *octoPrintTabSwitch = nullptr;
 
 lv_obj_t *wifiStatus = nullptr;
 lv_obj_t *ipStatus = nullptr;
@@ -85,6 +89,22 @@ void updateAppearanceUi(bool saved = true) {
       lv_obj_clear_state(performanceMonitorSwitch, LV_STATE_CHECKED);
     }
   }
+  if (counterTabSwitch != nullptr) {
+    if (AppTheme::showCounterTab()) lv_obj_add_state(counterTabSwitch, LV_STATE_CHECKED);
+    else lv_obj_clear_state(counterTabSwitch, LV_STATE_CHECKED);
+  }
+#if APP_ENABLE_DOMOTICA
+  if (domoticaTabSwitch != nullptr) {
+    if (AppTheme::showDomoticaTab()) lv_obj_add_state(domoticaTabSwitch, LV_STATE_CHECKED);
+    else lv_obj_clear_state(domoticaTabSwitch, LV_STATE_CHECKED);
+  }
+#endif
+#if APP_ENABLE_OCTOPRINT
+  if (octoPrintTabSwitch != nullptr) {
+    if (AppTheme::showOctoPrintTab()) lv_obj_add_state(octoPrintTabSwitch, LV_STATE_CHECKED);
+    else lv_obj_clear_state(octoPrintTabSwitch, LV_STATE_CHECKED);
+  }
+#endif
 
   if (themeStatus != nullptr) {
     if (!saved) {
@@ -115,6 +135,34 @@ void onPerformanceMonitorChanged(lv_event_t *event) {
   bool saved = AppTheme::setShowPerformanceMonitor(enabled);
   appApplyPerformanceMonitorVisibility();
   updateAppearanceUi(saved);
+}
+
+void onTabVisibilityChanged(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+
+  lv_obj_t *target = lv_event_get_target(event);
+  bool visible = lv_obj_has_state(target, LV_STATE_CHECKED);
+  bool saved = false;
+
+  if (target == counterTabSwitch) {
+    saved = AppTheme::setShowCounterTab(visible);
+  }
+#if APP_ENABLE_DOMOTICA
+  else if (target == domoticaTabSwitch) {
+    saved = AppTheme::setShowDomoticaTab(visible);
+  }
+#endif
+#if APP_ENABLE_OCTOPRINT
+  else if (target == octoPrintTabSwitch) {
+    saved = AppTheme::setShowOctoPrintTab(visible);
+  }
+#endif
+  else {
+    return;
+  }
+
+  updateAppearanceUi(saved);
+  appRebuildTabs();
 }
 
 void updateNetworkUi() {
@@ -165,6 +213,13 @@ void showCategory(SettingsCategory category) {
       updateNetworkUi();
       lv_obj_clear_flag(wifiPage, LV_OBJ_FLAG_HIDDEN);
       break;
+
+    case SettingsCategory::OCTOPRINT:
+#if APP_ENABLE_OCTOPRINT
+      lv_obj_add_flag(categoryLayer, LV_OBJ_FLAG_HIDDEN);
+      OctoPrintFeature::showSettings();
+#endif
+      return;
   }
 
   lv_obj_clear_flag(categoryLayer, LV_OBJ_FLAG_HIDDEN);
@@ -463,8 +518,55 @@ void createAppearancePage() {
     nullptr
   );
 
+  lv_obj_t *tabsTitle = lv_label_create(appearancePage);
+  lv_label_set_text(tabsTitle, "Tabs visibles");
+  lv_obj_set_pos(tabsTitle, 15, 335);
+
+  lv_obj_t *counterTabLabel = lv_label_create(appearancePage);
+  lv_label_set_text(counterTabLabel, "Contador");
+  lv_obj_set_pos(counterTabLabel, 15, 380);
+  counterTabSwitch = lv_switch_create(appearancePage);
+  lv_obj_set_pos(counterTabSwitch, 190, 369);
+  lv_obj_set_size(counterTabSwitch, 58, 34);
+  lv_obj_add_event_cb(
+    counterTabSwitch,
+    onTabVisibilityChanged,
+    LV_EVENT_VALUE_CHANGED,
+    nullptr
+  );
+
+#if APP_ENABLE_DOMOTICA
+  lv_obj_t *domoticaTabLabel = lv_label_create(appearancePage);
+  lv_label_set_text(domoticaTabLabel, "Domotica");
+  lv_obj_set_pos(domoticaTabLabel, 15, 425);
+  domoticaTabSwitch = lv_switch_create(appearancePage);
+  lv_obj_set_pos(domoticaTabSwitch, 190, 414);
+  lv_obj_set_size(domoticaTabSwitch, 58, 34);
+  lv_obj_add_event_cb(
+    domoticaTabSwitch,
+    onTabVisibilityChanged,
+    LV_EVENT_VALUE_CHANGED,
+    nullptr
+  );
+#endif
+
+#if APP_ENABLE_OCTOPRINT
+  lv_obj_t *octoPrintTabLabel = lv_label_create(appearancePage);
+  lv_label_set_text(octoPrintTabLabel, "OctoPrint");
+  lv_obj_set_pos(octoPrintTabLabel, 15, 470);
+  octoPrintTabSwitch = lv_switch_create(appearancePage);
+  lv_obj_set_pos(octoPrintTabSwitch, 190, 459);
+  lv_obj_set_size(octoPrintTabSwitch, 58, 34);
+  lv_obj_add_event_cb(
+    octoPrintTabSwitch,
+    onTabVisibilityChanged,
+    LV_EVENT_VALUE_CHANGED,
+    nullptr
+  );
+#endif
+
   lv_obj_t *bottomSpacer = lv_obj_create(appearancePage);
-  lv_obj_set_pos(bottomSpacer, 0, 330);
+  lv_obj_set_pos(bottomSpacer, 0, 515);
   lv_obj_set_size(bottomSpacer, 1, 20);
   lv_obj_set_style_bg_opa(bottomSpacer, LV_OPA_TRANSP, LV_PART_MAIN);
   lv_obj_set_style_border_width(bottomSpacer, 0, LV_PART_MAIN);
@@ -590,6 +692,21 @@ void create(lv_obj_t *parent) {
     onOpenCategory,
     reinterpret_cast<void *>(static_cast<intptr_t>(SettingsCategory::WIFI))
   );
+
+#if APP_ENABLE_OCTOPRINT
+  if (AppTheme::showOctoPrintTab()) {
+    appCreateButton(
+      parent,
+      "OCTOPRINT",
+      15,
+      164,
+      215,
+      72,
+      onOpenCategory,
+      reinterpret_cast<void *>(static_cast<intptr_t>(SettingsCategory::OCTOPRINT))
+    );
+  }
+#endif
 }
 
 void createOverlay() {

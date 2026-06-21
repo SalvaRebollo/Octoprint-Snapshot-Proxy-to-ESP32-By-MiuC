@@ -13,3 +13,4 @@ void appShowPage(AppPage page, lv_anim_enable_t animation = LV_ANIM_ON);
 void appApplyTabViewAppearance();
 void appPreviewTabBarHeight(uint16_t height);
 void appApplyPerformanceMonitorVisibility();
+void appRebuildTabs();

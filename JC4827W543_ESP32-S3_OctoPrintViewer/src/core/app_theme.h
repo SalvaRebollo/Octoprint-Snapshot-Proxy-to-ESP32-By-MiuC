@@ -20,4 +20,11 @@ bool setTabBarHeight(uint16_t height);
 
 bool showPerformanceMonitor();
 bool setShowPerformanceMonitor(bool enabled);
+
+bool showCounterTab();
+bool setShowCounterTab(bool enabled);
+bool showDomoticaTab();
+bool setShowDomoticaTab(bool enabled);
+bool showOctoPrintTab();
+bool setShowOctoPrintTab(bool enabled);
 }

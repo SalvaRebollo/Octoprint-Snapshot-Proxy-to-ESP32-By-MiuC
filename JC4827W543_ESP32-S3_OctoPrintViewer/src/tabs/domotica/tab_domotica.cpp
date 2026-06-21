@@ -72,6 +72,11 @@ bool begin() {
   return WebhookService::begin();
 }
 
+void detachUi() {
+  statusLabel = nullptr;
+  actionsContainer = nullptr;
+}
+
 void create(lv_obj_t *parent) {
   lv_obj_add_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scroll_dir(parent, LV_DIR_VER);
@@ -143,6 +148,7 @@ void loop() {
   WebhookService::Result result;
   if (!WebhookService::takeResult(result)) return;
 
+  if (statusLabel == nullptr) return;
   setButtonsEnabled(true);
   const char *actionTitle = WebhookService::title(result.index);
 

@@ -54,10 +54,10 @@ static lv_obj_t *tabView = nullptr;
 static lv_obj_t *performanceMonitorLabel = nullptr;
 static uint32_t lastPerformanceMonitorSearchMs = 0;
 
-static uint8_t counterTabIndex = 0;
+static int8_t counterTabIndex = -1;
 static int8_t domoticaTabIndex = -1;
 static int8_t octoprintTabIndex = -1;
-static uint8_t settingsTabIndex = 0;
+static int8_t settingsTabIndex = -1;
 
 void serviceUi() {
   lv_timer_handler();
@@ -70,10 +70,11 @@ void serviceUi() {
 void appShowPage(AppPage page, lv_anim_enable_t animation) {
   if (tabView == nullptr) return;
 
-  uint8_t target = counterTabIndex;
+  uint8_t target = settingsTabIndex >= 0 ? static_cast<uint8_t>(settingsTabIndex) : 0;
   switch (page) {
     case AppPage::COUNTER:
-      target = counterTabIndex;
+      if (counterTabIndex < 0) return;
+      target = static_cast<uint8_t>(counterTabIndex);
       break;
 
     case AppPage::DOMOTICA:
@@ -87,7 +88,8 @@ void appShowPage(AppPage page, lv_anim_enable_t animation) {
       break;
 
     case AppPage::SETTINGS:
-      target = settingsTabIndex;
+      if (settingsTabIndex < 0) return;
+      target = static_cast<uint8_t>(settingsTabIndex);
       break;
   }
 
@@ -167,8 +169,22 @@ void onTabChanged(lv_event_t *event) {
 #endif
 }
 
-void createApplicationUi() {
-  lv_obj_clean(lv_scr_act());
+void buildApplicationTabs() {
+  if (tabView != nullptr) {
+#if APP_ENABLE_OCTOPRINT
+    OctoPrintFeature::detachTabUi();
+#endif
+#if APP_ENABLE_DOMOTICA
+    DomoticaTab::detachUi();
+#endif
+    lv_obj_del(tabView);
+    tabView = nullptr;
+  }
+
+  counterTabIndex = -1;
+  domoticaTabIndex = -1;
+  octoprintTabIndex = -1;
+  settingsTabIndex = -1;
 
   tabView = lv_tabview_create(
     lv_scr_act(),
@@ -178,35 +194,48 @@ void createApplicationUi() {
   lv_obj_set_size(tabView, APP_SCREEN_WIDTH, APP_SCREEN_HEIGHT);
   lv_obj_center(tabView);
   lv_obj_add_event_cb(tabView, onTabChanged, LV_EVENT_VALUE_CHANGED, nullptr);
-
   appApplyTabViewAppearance();
-
 
   uint8_t nextIndex = 0;
 
-  counterTabIndex = nextIndex++;
-  lv_obj_t *counterTab = lv_tabview_add_tab(tabView, "Contador");
-  CounterTab::create(counterTab);
+  if (AppTheme::showCounterTab()) {
+    counterTabIndex = static_cast<int8_t>(nextIndex++);
+    lv_obj_t *counterTab = lv_tabview_add_tab(tabView, "Contador");
+    CounterTab::create(counterTab);
+  }
 
 #if APP_ENABLE_DOMOTICA
-  domoticaTabIndex = nextIndex++;
-  lv_obj_t *domoticaTab = lv_tabview_add_tab(tabView, "Domotica");
-  DomoticaTab::create(domoticaTab);
-#else
-  domoticaTabIndex = -1;
+  if (AppTheme::showDomoticaTab()) {
+    domoticaTabIndex = static_cast<int8_t>(nextIndex++);
+    lv_obj_t *domoticaTab = lv_tabview_add_tab(tabView, "Domotica");
+    DomoticaTab::create(domoticaTab);
+  }
 #endif
 
 #if APP_ENABLE_OCTOPRINT
-  octoprintTabIndex = nextIndex++;
-  lv_obj_t *octoprintTab = lv_tabview_add_tab(tabView, "OctoPrint");
-  OctoPrintTab::create(octoprintTab);
-#else
-  octoprintTabIndex = -1;
+  if (AppTheme::showOctoPrintTab()) {
+    octoprintTabIndex = static_cast<int8_t>(nextIndex++);
+    lv_obj_t *octoprintTab = lv_tabview_add_tab(tabView, "OctoPrint");
+    OctoPrintTab::create(octoprintTab);
+  }
 #endif
 
-  settingsTabIndex = nextIndex++;
+  settingsTabIndex = static_cast<int8_t>(nextIndex++);
   lv_obj_t *settingsTab = lv_tabview_add_tab(tabView, "Ajustes");
   SettingsTab::create(settingsTab);
+}
+
+void appRebuildTabs() {
+#if APP_ENABLE_OCTOPRINT
+  OctoPrintFeature::hideControls();
+#endif
+  buildApplicationTabs();
+  appShowPage(AppPage::SETTINGS, LV_ANIM_OFF);
+}
+
+void createApplicationUi() {
+  lv_obj_clean(lv_scr_act());
+  buildApplicationTabs();
 
 #if APP_ENABLE_OCTOPRINT
   OctoPrintFeature::createOverlays();
@@ -214,12 +243,15 @@ void createApplicationUi() {
   SettingsTab::createOverlay();
 
 #if APP_ENABLE_OCTOPRINT
-  appShowPage(AppPage::OCTOPRINT, LV_ANIM_OFF);
+  if (octoprintTabIndex >= 0) {
+    appShowPage(AppPage::OCTOPRINT, LV_ANIM_OFF);
+  } else {
+    appShowPage(AppPage::SETTINGS, LV_ANIM_OFF);
+  }
 #else
-  appShowPage(AppPage::COUNTER, LV_ANIM_OFF);
+  appShowPage(AppPage::SETTINGS, LV_ANIM_OFF);
 #endif
 }
-
 // ============================================================
 // DRIVERS LVGL
 // ============================================================
