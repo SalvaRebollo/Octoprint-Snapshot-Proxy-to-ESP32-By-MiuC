@@ -8,4 +8,4 @@
 
 constexpr uint16_t APP_SCREEN_WIDTH = 480;
 constexpr uint16_t APP_SCREEN_HEIGHT = 272;
-constexpr uint16_t APP_TAB_BAR_HEIGHT = 20;//36;
+constexpr uint16_t APP_TAB_BAR_HEIGHT = 25;//36;
