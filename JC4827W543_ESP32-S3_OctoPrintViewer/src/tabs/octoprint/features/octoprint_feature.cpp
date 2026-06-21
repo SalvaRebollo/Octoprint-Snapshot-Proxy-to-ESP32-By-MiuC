@@ -7,6 +7,7 @@
 #include <JPEGDEC.h>
 #include <Preferences.h>
 #include <WiFi.h>
+#include <string.h>
 #include <esp_heap_caps.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -86,6 +87,7 @@ float cameraX = DEFAULT_X;
 float cameraY = DEFAULT_Y;
 uint32_t snapshotIntervalMs = DEFAULT_INTERVAL_MS;
 
+lv_obj_t *cameraFrame = nullptr;
 lv_obj_t *cameraImage = nullptr;
 lv_obj_t *cameraStatus = nullptr;
 lv_obj_t *fullscreenLayer = nullptr;
@@ -161,15 +163,24 @@ uint8_t intervalToDropdownIndex(uint32_t value) {
   }
 }
 
+void setLabelTextIfChanged(lv_obj_t *label, const char *text) {
+  if (label == nullptr || text == nullptr) return;
+  const char *currentText = lv_label_get_text(label);
+  if (currentText != nullptr && strcmp(currentText, text) == 0) return;
+  lv_label_set_text(label, text);
+}
+
 void setStatus(const char *text) {
-  if (cameraStatus != nullptr) lv_label_set_text(cameraStatus, text);
-  if (fullscreenStatus != nullptr) lv_label_set_text(fullscreenStatus, text);
+  setLabelTextIfChanged(cameraStatus, text);
+  setLabelTextIfChanged(fullscreenStatus, text);
 }
 
 void setWorkerStatus(const char *text) {
   portENTER_CRITICAL(&stateMux);
-  snprintf(workerStatus, sizeof(workerStatus), "%s", text);
-  workerStatusDirty = true;
+  if (strncmp(workerStatus, text, sizeof(workerStatus)) != 0) {
+    snprintf(workerStatus, sizeof(workerStatus), "%s", text);
+    workerStatusDirty = true;
+  }
   portEXIT_CRITICAL(&stateMux);
 }
 
@@ -279,12 +290,13 @@ void markSettingsDirty() {
 uint16_t calculateImageZoom(
   uint16_t sourceWidth,
   uint16_t sourceHeight,
-  uint16_t maxWidth,
-  uint16_t maxHeight
+  uint16_t targetWidth,
+  uint16_t targetHeight,
+  bool cover
 ) {
-  uint32_t zoomX = (static_cast<uint32_t>(maxWidth) * 256) / sourceWidth;
-  uint32_t zoomY = (static_cast<uint32_t>(maxHeight) * 256) / sourceHeight;
-  uint32_t zoom = min(zoomX, zoomY);
+  uint32_t zoomX = (static_cast<uint32_t>(targetWidth) * 256) / sourceWidth;
+  uint32_t zoomY = (static_cast<uint32_t>(targetHeight) * 256) / sourceHeight;
+  uint32_t zoom = cover ? max(zoomX, zoomY) : min(zoomX, zoomY);
   if (zoom > 768) zoom = 768;
   if (zoom < 1) zoom = 1;
   return static_cast<uint16_t>(zoom);
@@ -293,10 +305,19 @@ uint16_t calculateImageZoom(
 void updateImageLayout() {
   if (displayedFrameWidth == 0 || displayedFrameHeight == 0) return;
 
-  if (cameraImage != nullptr) {
+  if (cameraFrame != nullptr && cameraImage != nullptr) {
+    lv_obj_update_layout(cameraFrame);
+    uint16_t frameWidth = lv_obj_get_content_width(cameraFrame);
+    uint16_t frameHeight = lv_obj_get_content_height(cameraFrame);
     lv_img_set_zoom(
       cameraImage,
-      calculateImageZoom(displayedFrameWidth, displayedFrameHeight, 400, 198)
+      calculateImageZoom(
+        displayedFrameWidth,
+        displayedFrameHeight,
+        frameWidth,
+        frameHeight,
+        true
+      )
     );
     lv_obj_center(cameraImage);
   }
@@ -304,7 +325,7 @@ void updateImageLayout() {
   if (fullscreenImage != nullptr) {
     lv_img_set_zoom(
       fullscreenImage,
-      calculateImageZoom(displayedFrameWidth, displayedFrameHeight, 480, 272)
+      calculateImageZoom(displayedFrameWidth, displayedFrameHeight, 480, 272, false)
     );
     lv_obj_center(fullscreenImage);
   }
@@ -575,7 +596,6 @@ bool queueSnapshotRequest() {
   portEXIT_CRITICAL(&stateMux);
 
   if (queued) {
-    setStatus("Descargando captura...");
     xTaskNotifyGive(snapshotTaskHandle);
   }
   return queued;
@@ -777,7 +797,7 @@ void snapshotTask(void *) {
     downloadBusy = false;
     portEXIT_CRITICAL(&stateMux);
 
-    if (success) setWorkerStatus("Camara actualizada - toca la imagen");
+    if (success) setWorkerStatus("Camara activa - toca para controles");
   }
 }
 }
@@ -811,14 +831,15 @@ void createTab(lv_obj_t *parent) {
   lv_obj_clear_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_pad_all(parent, 0, LV_PART_MAIN);
 
-  lv_obj_t *cameraFrame = lv_obj_create(parent);
-  lv_obj_set_size(cameraFrame, 400, 198);
-  lv_obj_align(cameraFrame, LV_ALIGN_TOP_MID, 0, 0);
+  cameraFrame = lv_obj_create(parent);
+  lv_obj_set_size(cameraFrame, LV_PCT(100), LV_PCT(100));
+  lv_obj_center(cameraFrame);
   lv_obj_clear_flag(cameraFrame, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(cameraFrame, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_set_style_bg_color(cameraFrame, lv_color_black(), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(cameraFrame, LV_OPA_COVER, LV_PART_MAIN);
   lv_obj_set_style_border_width(cameraFrame, 0, LV_PART_MAIN);
+  lv_obj_set_style_radius(cameraFrame, 0, LV_PART_MAIN);
   lv_obj_set_style_pad_all(cameraFrame, 0, LV_PART_MAIN);
   lv_obj_add_event_cb(cameraFrame, onCameraAreaTap, LV_EVENT_CLICKED, nullptr);
 
