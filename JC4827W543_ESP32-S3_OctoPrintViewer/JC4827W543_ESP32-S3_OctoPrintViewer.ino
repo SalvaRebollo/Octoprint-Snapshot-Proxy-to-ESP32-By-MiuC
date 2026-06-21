@@ -5,13 +5,17 @@
 
 #include "src/core/app_config.h"
 #include "src/core/app_navigation.h"
-#include "src/tabs/tab_counter.h"
-#include "src/tabs/tab_settings.h"
+#include "src/tabs/counter/tab_counter.h"
+#include "src/tabs/settings/tab_settings.h"
+
+#if APP_ENABLE_DOMOTICA
+#include "src/tabs/domotica/tab_domotica.h"
+#endif
 #include "touch.h"
 
 #if APP_ENABLE_OCTOPRINT
-#include "src/features/octoprint/octoprint_feature.h"
-#include "src/tabs/tab_octoprint.h"
+#include "src/tabs/octoprint/features/octoprint_feature.h"
+#include "src/tabs/octoprint/tab_octoprint.h"
 #endif
 
 // ============================================================
@@ -48,6 +52,7 @@ static bool displayFlushPending = false;
 static lv_obj_t *tabView = nullptr;
 
 static uint8_t counterTabIndex = 0;
+static int8_t domoticaTabIndex = -1;
 static int8_t octoprintTabIndex = -1;
 static uint8_t settingsTabIndex = 0;
 
@@ -66,6 +71,11 @@ void appShowPage(AppPage page, lv_anim_enable_t animation) {
   switch (page) {
     case AppPage::COUNTER:
       target = counterTabIndex;
+      break;
+
+    case AppPage::DOMOTICA:
+      if (domoticaTabIndex < 0) return;
+      target = static_cast<uint8_t>(domoticaTabIndex);
       break;
 
     case AppPage::OCTOPRINT:
@@ -109,6 +119,14 @@ void createApplicationUi() {
   counterTabIndex = nextIndex++;
   lv_obj_t *counterTab = lv_tabview_add_tab(tabView, "Contador");
   CounterTab::create(counterTab);
+
+#if APP_ENABLE_DOMOTICA
+  domoticaTabIndex = nextIndex++;
+  lv_obj_t *domoticaTab = lv_tabview_add_tab(tabView, "Domotica");
+  DomoticaTab::create(domoticaTab);
+#else
+  domoticaTabIndex = -1;
+#endif
 
 #if APP_ENABLE_OCTOPRINT
   octoprintTabIndex = nextIndex++;
@@ -255,6 +273,11 @@ void setup() {
 #if APP_ENABLE_OCTOPRINT
   OctoPrintFeature::startWorker();
 #endif
+#if APP_ENABLE_DOMOTICA
+  if (!DomoticaTab::begin()) {
+    Serial.println("No se pudo iniciar el servicio de domotica");
+  }
+#endif
   SettingsTab::beginWifi();
 
   Serial.println("Setup terminado");
@@ -263,6 +286,10 @@ void setup() {
 void loop() {
   serviceUi();
   SettingsTab::loop();
+
+#if APP_ENABLE_DOMOTICA
+  DomoticaTab::loop();
+#endif
 
 #if APP_ENABLE_OCTOPRINT
   bool octoprintActive =

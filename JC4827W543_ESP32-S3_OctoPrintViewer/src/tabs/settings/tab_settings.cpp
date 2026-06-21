@@ -2,12 +2,12 @@
 
 #include <WiFi.h>
 
-#include "../core/app_config.h"
-#include "../core/app_ui.h"
-#include "../services/wifi/wifi_manager.h"
+#include "../../core/app_config.h"
+#include "../../core/app_ui.h"
+#include "services/wifi_manager.h"
 
 #if APP_ENABLE_OCTOPRINT
-#include "../features/octoprint/octoprint_feature.h"
+#include "../octoprint/features/octoprint_feature.h"
 #endif
 
 namespace SettingsTab {

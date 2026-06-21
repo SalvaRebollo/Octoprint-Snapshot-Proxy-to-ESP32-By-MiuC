@@ -4,6 +4,7 @@
 
 enum class AppPage : uint8_t {
   COUNTER,
+  DOMOTICA,
   OCTOPRINT,
   SETTINGS
 };

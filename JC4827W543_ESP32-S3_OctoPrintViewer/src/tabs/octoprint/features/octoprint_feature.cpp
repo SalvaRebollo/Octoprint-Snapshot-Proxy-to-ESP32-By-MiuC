@@ -1,4 +1,4 @@
-#include "../../core/app_config.h"
+#include "../../../core/app_config.h"
 
 #if APP_ENABLE_OCTOPRINT
 #include "octoprint_feature.h"
@@ -11,8 +11,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-#include "../../core/app_navigation.h"
-#include "../../core/app_ui.h"
+#include "../../../core/app_navigation.h"
+#include "../../../core/app_ui.h"
 
 namespace OctoPrintFeature {
 namespace {

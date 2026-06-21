@@ -1,6 +1,6 @@
 #include "tab_counter.h"
 
-#include "../core/app_ui.h"
+#include "../../core/app_ui.h"
 
 namespace CounterTab {
 namespace {
