@@ -93,6 +93,8 @@ lv_obj_t *fullscreenImage = nullptr;
 lv_obj_t *fullscreenStatus = nullptr;
 lv_obj_t *cameraControls = nullptr;
 lv_obj_t *cameraValuesLabel = nullptr;
+lv_obj_t *parametersLayer = nullptr;
+lv_obj_t *parametersContent = nullptr;
 lv_obj_t *savedStatus = nullptr;
 lv_obj_t *resolutionDropdown = nullptr;
 lv_obj_t *qualitySlider = nullptr;
@@ -129,6 +131,12 @@ char workerStatus[96] = "";
 uint32_t lastSnapshotMs = 0;
 bool forceSnapshot = false;
 bool fullscreenActive = false;
+
+void setReadableText(lv_obj_t *label) {
+  if (label == nullptr) return;
+  lv_obj_set_style_text_color(label, lv_color_white(), LV_PART_MAIN);
+  lv_obj_set_style_text_opa(label, LV_OPA_COVER, LV_PART_MAIN);
+}
 
 float clampFloat(float value, float minimum, float maximum) {
   if (value < minimum) return minimum;
@@ -339,8 +347,31 @@ void onFullscreenExit(lv_event_t *event) {
   if (lv_event_get_code(event) == LV_EVENT_CLICKED) exitFullscreen();
 }
 
+void hideParameterScreen() {
+  if (parametersLayer != nullptr) {
+    lv_obj_add_flag(parametersLayer, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void showParameterScreen() {
+  if (parametersLayer == nullptr) return;
+  hideControls();
+  syncParameterControls();
+  if (parametersContent != nullptr) {
+    lv_obj_scroll_to_y(parametersContent, 0, LV_ANIM_OFF);
+  }
+  lv_obj_clear_flag(parametersLayer, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_move_foreground(parametersLayer);
+}
+
+void onCloseParameters(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  hideParameterScreen();
+}
+
 void onViewCamera(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  hideParameterScreen();
   appShowPage(AppPage::OCTOPRINT);
   forceSnapshot = true;
 }
@@ -377,7 +408,7 @@ void onCameraControl(lv_event_t *event) {
       return;
     case CAMERA_SETTINGS:
       exitFullscreen();
-      appShowPage(AppPage::SETTINGS);
+      showParameterScreen();
       return;
   }
 
@@ -798,6 +829,9 @@ void createTab(lv_obj_t *parent) {
   lv_label_set_text(cameraStatus, "Esperando conexion...");
   lv_obj_set_width(cameraStatus, 470);
   lv_obj_set_style_text_align(cameraStatus, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  setReadableText(cameraStatus);
+  lv_obj_set_style_bg_color(cameraStatus, lv_color_black(), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(cameraStatus, LV_OPA_70, LV_PART_MAIN);
   lv_obj_align(cameraStatus, LV_ALIGN_BOTTOM_MID, 0, -2);
 }
 
@@ -805,10 +839,12 @@ lv_coord_t createSettingsSection(lv_obj_t *parent, lv_coord_t startY) {
   lv_obj_t *title = lv_label_create(parent);
   lv_label_set_text(title, "Parametros del snapshot");
   lv_obj_set_pos(title, 130, startY + 5);
+  setReadableText(title);
 
   lv_obj_t *resolutionLabel = lv_label_create(parent);
   lv_label_set_text(resolutionLabel, "Resolucion");
   lv_obj_set_pos(resolutionLabel, 10, startY + 42);
+  setReadableText(resolutionLabel);
 
   resolutionDropdown = lv_dropdown_create(parent);
   lv_dropdown_set_options(resolutionDropdown, "320 x 180\n368 x 207\n480 x 270\n480 x 272");
@@ -819,6 +855,7 @@ lv_coord_t createSettingsSection(lv_obj_t *parent, lv_coord_t startY) {
   lv_obj_t *intervalLabel = lv_label_create(parent);
   lv_label_set_text(intervalLabel, "Refresco");
   lv_obj_set_pos(intervalLabel, 245, startY + 42);
+  setReadableText(intervalLabel);
 
   intervalDropdown = lv_dropdown_create(parent);
   lv_dropdown_set_options(intervalDropdown, "0.5 s\n1 s\n2 s\n5 s");
@@ -838,9 +875,11 @@ lv_coord_t createSettingsSection(lv_obj_t *parent, lv_coord_t startY) {
     lv_obj_t *label = lv_label_create(parent);
     lv_label_set_text(label, names[i]);
     lv_obj_set_pos(label, 10, y);
+    setReadableText(label);
 
     *values[i] = lv_label_create(parent);
     lv_obj_set_pos(*values[i], 75, y);
+    setReadableText(*values[i]);
 
     *sliders[i] = lv_slider_create(parent);
     lv_obj_set_pos(*sliders[i], 125, y + 1);
@@ -859,8 +898,9 @@ lv_coord_t createSettingsSection(lv_obj_t *parent, lv_coord_t startY) {
   appCreateButton(parent, "RESET", 280, startY + 275, 80, 40, onResetParameters);
 
   savedStatus = lv_label_create(parent);
-  lv_label_set_text(savedStatus, "Cambios sin guardar");
+  lv_label_set_text(savedStatus, "Valores cargados");
   lv_obj_set_pos(savedStatus, 10, startY + 327);
+  setReadableText(savedStatus);
 
   syncParameterControls();
   return startY + 365;
@@ -884,6 +924,7 @@ void createOverlays() {
   fullscreenStatus = lv_label_create(fullscreenLayer);
   lv_obj_set_width(fullscreenStatus, 420);
   lv_obj_set_style_text_align(fullscreenStatus, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+  setReadableText(fullscreenStatus);
   lv_obj_set_style_bg_color(fullscreenStatus, lv_color_black(), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(fullscreenStatus, LV_OPA_50, LV_PART_MAIN);
   lv_obj_align(fullscreenStatus, LV_ALIGN_BOTTOM_MID, 0, -4);
@@ -895,8 +936,8 @@ void createOverlays() {
   lv_obj_add_flag(fullscreenLayer, LV_OBJ_FLAG_HIDDEN);
 
   cameraControls = lv_obj_create(lv_layer_top());
-  lv_obj_set_size(cameraControls, 340, 238);
-  lv_obj_center(cameraControls);
+  lv_obj_set_size(cameraControls, 340, 244);
+  lv_obj_align(cameraControls, LV_ALIGN_CENTER, 0, 0);
   lv_obj_clear_flag(cameraControls, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_style_bg_color(cameraControls, lv_color_hex(0x101010), LV_PART_MAIN);
   lv_obj_set_style_bg_opa(cameraControls, LV_OPA_90, LV_PART_MAIN);
@@ -908,25 +949,65 @@ void createOverlays() {
   lv_obj_t *title = lv_label_create(cameraControls);
   lv_label_set_text(title, "Control de encuadre");
   lv_obj_set_pos(title, 10, 8);
+  setReadableText(title);
 
   cameraValuesLabel = lv_label_create(cameraControls);
   lv_obj_set_width(cameraValuesLabel, 318);
   lv_obj_set_style_text_align(cameraValuesLabel, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-  lv_obj_set_pos(cameraValuesLabel, 10, 35);
+  lv_obj_set_pos(cameraValuesLabel, 10, 32);
+  setReadableText(cameraValuesLabel);
 
   createActionButton(cameraControls, "X", 298, 5, 34, 30, CAMERA_CLOSE);
-  createActionButton(cameraControls, "^", 145, 65, 50, 36, CAMERA_UP);
-  createActionButton(cameraControls, "<", 87, 105, 50, 36, CAMERA_LEFT);
-  createActionButton(cameraControls, "RESET", 143, 105, 54, 36, CAMERA_RESET);
-  createActionButton(cameraControls, ">", 203, 105, 50, 36, CAMERA_RIGHT);
-  createActionButton(cameraControls, "v", 145, 145, 50, 36, CAMERA_DOWN);
-  createActionButton(cameraControls, "ZOOM -", 10, 145, 100, 36, CAMERA_ZOOM_OUT);
-  createActionButton(cameraControls, "ZOOM +", 230, 145, 100, 36, CAMERA_ZOOM_IN);
-  createActionButton(cameraControls, "FULLSCREEN", 10, 192, 150, 38, CAMERA_FULLSCREEN);
-  createActionButton(cameraControls, "PARAMETROS", 180, 192, 150, 38, CAMERA_SETTINGS);
+  createActionButton(cameraControls, "^", 145, 55, 50, 36, CAMERA_UP);
+  createActionButton(cameraControls, "<", 87, 95, 50, 36, CAMERA_LEFT);
+  createActionButton(cameraControls, "RESET", 143, 95, 54, 36, CAMERA_RESET);
+  createActionButton(cameraControls, ">", 203, 95, 50, 36, CAMERA_RIGHT);
+  createActionButton(cameraControls, "v", 145, 135, 50, 36, CAMERA_DOWN);
+  createActionButton(cameraControls, "ZOOM -", 10, 135, 100, 36, CAMERA_ZOOM_OUT);
+  createActionButton(cameraControls, "ZOOM +", 230, 135, 100, 36, CAMERA_ZOOM_IN);
+  createActionButton(cameraControls, "FULLSCREEN", 10, 184, 150, 38, CAMERA_FULLSCREEN);
+  createActionButton(cameraControls, "PARAMETROS", 180, 184, 150, 38, CAMERA_SETTINGS);
 
   updateCameraValuesLabel();
   lv_obj_add_flag(cameraControls, LV_OBJ_FLAG_HIDDEN);
+
+  parametersLayer = lv_obj_create(lv_layer_top());
+  lv_obj_set_pos(parametersLayer, 0, 0);
+  lv_obj_set_size(parametersLayer, 480, 272);
+  lv_obj_clear_flag(parametersLayer, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_style_bg_color(parametersLayer, lv_color_hex(0x101010), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(parametersLayer, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_border_width(parametersLayer, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(parametersLayer, 0, LV_PART_MAIN);
+
+  lv_obj_t *parametersTitle = lv_label_create(parametersLayer);
+  lv_label_set_text(parametersTitle, "Parametros OctoPrint");
+  lv_obj_set_pos(parametersTitle, 10, 10);
+  setReadableText(parametersTitle);
+
+  appCreateButton(
+    parametersLayer,
+    "CERRAR",
+    390,
+    3,
+    80,
+    32,
+    onCloseParameters
+  );
+
+  parametersContent = lv_obj_create(parametersLayer);
+  lv_obj_set_pos(parametersContent, 0, 38);
+  lv_obj_set_size(parametersContent, 480, 234);
+  lv_obj_add_flag(parametersContent, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(parametersContent, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(parametersContent, LV_SCROLLBAR_MODE_ACTIVE);
+  lv_obj_set_style_bg_opa(parametersContent, LV_OPA_TRANSP, LV_PART_MAIN);
+  lv_obj_set_style_border_width(parametersContent, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(parametersContent, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_bottom(parametersContent, 25, LV_PART_MAIN);
+
+  createSettingsSection(parametersContent, 0);
+  lv_obj_add_flag(parametersLayer, LV_OBJ_FLAG_HIDDEN);
 }
 
 void loop(bool tabActive) {

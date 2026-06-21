@@ -188,10 +188,7 @@ void create(lv_obj_t *parent) {
   lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_ACTIVE);
   lv_obj_set_style_pad_bottom(parent, 30, LV_PART_MAIN);
 
-  lv_coord_t y = 0;
-#if APP_ENABLE_OCTOPRINT
-  y = OctoPrintFeature::createSettingsSection(parent, y);
-#endif
+  constexpr lv_coord_t y = 0;
 
   lv_obj_t *wifiTitle = lv_label_create(parent);
   lv_label_set_text(wifiTitle, "Conexion WiFi");
