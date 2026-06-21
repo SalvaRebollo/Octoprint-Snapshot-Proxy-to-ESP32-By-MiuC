@@ -3,6 +3,7 @@
 #include <WiFi.h>
 
 #include "../../core/app_config.h"
+#include "../../core/app_theme.h"
 #include "../../core/app_ui.h"
 #include "services/wifi_manager.h"
 
@@ -12,6 +13,9 @@
 
 namespace SettingsTab {
 namespace {
+lv_obj_t *themeButton = nullptr;
+lv_obj_t *themeStatus = nullptr;
+lv_obj_t *primaryColorDropdown = nullptr;
 lv_obj_t *wifiStatus = nullptr;
 lv_obj_t *ipStatus = nullptr;
 lv_obj_t *wifiSavedCount = nullptr;
@@ -24,6 +28,50 @@ uint32_t displayedWifiScanGeneration = UINT32_MAX;
 WifiManager::State previousWifiState = WifiManager::State::IDLE;
 uint32_t lastNetworkUiMs = 0;
 bool forceReconnect = false;
+
+void updateAppearanceUi(bool saved = true) {
+  if (themeButton != nullptr) {
+    lv_obj_t *label = lv_obj_get_child(themeButton, 0);
+    if (label != nullptr) {
+      lv_label_set_text(
+        label,
+        AppTheme::isDarkMode() ? "ACTIVAR MODO CLARO" : "ACTIVAR MODO OSCURO"
+      );
+      lv_obj_center(label);
+    }
+  }
+
+  if (themeStatus != nullptr) {
+    if (!saved) {
+      lv_label_set_text(themeStatus, "Tema aplicado, pero no se pudo guardar");
+    } else {
+      lv_label_set_text_fmt(
+        themeStatus,
+        "Tema: %s / %s",
+        AppTheme::isDarkMode() ? "oscuro" : "claro",
+        AppTheme::primaryColorName(AppTheme::primaryColorIndex())
+      );
+    }
+  }
+}
+
+void onThemeToggle(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  updateAppearanceUi(AppTheme::toggle());
+}
+
+void onPrimaryColorChanged(lv_event_t *event) {
+  if (
+    lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED ||
+    primaryColorDropdown == nullptr
+  ) {
+    return;
+  }
+
+  uint16_t selected = lv_dropdown_get_selected(primaryColorDropdown);
+  bool saved = AppTheme::setPrimaryColor(static_cast<uint8_t>(selected));
+  updateAppearanceUi(saved);
+}
 
 void updateNetworkUi() {
   if (wifiStatus == nullptr || ipStatus == nullptr) return;
@@ -188,7 +236,53 @@ void create(lv_obj_t *parent) {
   lv_obj_set_scrollbar_mode(parent, LV_SCROLLBAR_MODE_ACTIVE);
   lv_obj_set_style_pad_bottom(parent, 30, LV_PART_MAIN);
 
-  constexpr lv_coord_t y = 0;
+  lv_obj_t *appearanceTitle = lv_label_create(parent);
+  lv_label_set_text(appearanceTitle, "Apariencia");
+  lv_obj_set_pos(appearanceTitle, 10, 5);
+
+  themeButton = appCreateButton(
+    parent,
+    "",
+    10,
+    32,
+    220,
+    40,
+    onThemeToggle
+  );
+
+  themeStatus = lv_label_create(parent);
+  lv_obj_set_pos(themeStatus, 245, 38);
+  lv_obj_set_width(themeStatus, 220);
+  lv_label_set_long_mode(themeStatus, LV_LABEL_LONG_WRAP);
+
+  lv_obj_t *primaryColorLabel = lv_label_create(parent);
+  lv_label_set_text(primaryColorLabel, "Color principal");
+  lv_obj_set_pos(primaryColorLabel, 10, 91);
+
+  String primaryColorOptions;
+  for (uint8_t i = 0; i < AppTheme::primaryColorCount(); i++) {
+    if (!primaryColorOptions.isEmpty()) primaryColorOptions += "\n";
+    primaryColorOptions += AppTheme::primaryColorName(i);
+  }
+
+  primaryColorDropdown = lv_dropdown_create(parent);
+  lv_dropdown_set_options(primaryColorDropdown, primaryColorOptions.c_str());
+  lv_dropdown_set_selected(
+    primaryColorDropdown,
+    AppTheme::primaryColorIndex()
+  );
+  lv_obj_set_pos(primaryColorDropdown, 135, 80);
+  lv_obj_set_size(primaryColorDropdown, 180, 40);
+  lv_obj_add_event_cb(
+    primaryColorDropdown,
+    onPrimaryColorChanged,
+    LV_EVENT_VALUE_CHANGED,
+    nullptr
+  );
+
+  updateAppearanceUi();
+
+  constexpr lv_coord_t y = 135;
 
   lv_obj_t *wifiTitle = lv_label_create(parent);
   lv_label_set_text(wifiTitle, "Conexion WiFi");
@@ -229,6 +323,7 @@ void createOverlay() {
   lv_obj_t *title = lv_label_create(wifiDialog);
   lv_label_set_text(title, "Configurar WiFi");
   lv_obj_set_pos(title, 10, 9);
+  lv_obj_set_style_text_color(title, lv_color_white(), LV_PART_MAIN);
 
   appCreateButton(wifiDialog, "CERRAR", 405, 3, 68, 31, onCloseWifiDialog);
 
@@ -251,6 +346,7 @@ void createOverlay() {
   lv_label_set_text(wifiDialogStatus, "Selecciona una red");
   lv_obj_set_width(wifiDialogStatus, 460);
   lv_obj_set_pos(wifiDialogStatus, 10, 126);
+  lv_obj_set_style_text_color(wifiDialogStatus, lv_color_white(), LV_PART_MAIN);
 
   appCreateButton(wifiDialog, "GUARDAR Y CONECTAR", 10, 148, 220, 34, onConnectWifiClick);
   appCreateButton(wifiDialog, "OLVIDAR", 240, 148, 105, 34, onForgetWifiClick);

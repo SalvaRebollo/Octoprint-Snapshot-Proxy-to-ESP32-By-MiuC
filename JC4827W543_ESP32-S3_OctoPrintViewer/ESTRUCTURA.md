@@ -9,6 +9,8 @@ JC4827W543_ESP32-S3_OctoPrintViewer/
     ├── core/
     │   ├── app_config.h
     │   ├── app_navigation.h
+    │   ├── app_theme.h
+    │   ├── app_theme.cpp
     │   ├── app_ui.h
     │   └── app_ui.cpp
     └── tabs/
@@ -51,6 +53,11 @@ Arduino compila recursivamente los archivos `.cpp` que están dentro de `src/`.
 
 Cada tab conserva dentro de su carpeta sus propios `features/` y `services/`. Solo el código realmente compartido debe vivir en `src/core`.
 
+## Tema claro y oscuro
+
+`src/core/app_theme.h/.cpp` administra el tema general de LVGL. La preferencia se guarda en NVS dentro del namespace `appui`, usando la clave `dark`.
+
+El botón de la pestaña Ajustes aplica el cambio de modo inmediatamente. El selector de color modifica el color principal usado por botones, sliders y la línea de la tab activa. Ambas preferencias se escriben en NVS únicamente cuando el usuario cambia su control. Si todavía no existe una preferencia guardada, se utiliza el modo oscuro con color azul.
 ## Desactivar módulos
 
 En `src/core/app_config.h`:

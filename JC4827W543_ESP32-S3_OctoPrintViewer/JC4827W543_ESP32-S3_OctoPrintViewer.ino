@@ -5,6 +5,7 @@
 
 #include "src/core/app_config.h"
 #include "src/core/app_navigation.h"
+#include "src/core/app_theme.h"
 #include "src/tabs/counter/tab_counter.h"
 #include "src/tabs/settings/tab_settings.h"
 
@@ -113,6 +114,13 @@ void createApplicationUi() {
   lv_obj_set_size(tabView, APP_SCREEN_WIDTH, APP_SCREEN_HEIGHT);
   lv_obj_center(tabView);
   lv_obj_add_event_cb(tabView, onTabChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  lv_obj_t *tabButtons = lv_tabview_get_tab_btns(tabView);
+  lv_obj_set_style_text_color(
+    tabButtons,
+    lv_color_white(),
+    LV_PART_ITEMS | LV_STATE_CHECKED
+  );
 
   uint8_t nextIndex = 0;
 
@@ -233,6 +241,7 @@ bool initializeLvgl() {
   displayDriver.flush_cb = myDisplayFlush;
   displayDriver.draw_buf = &drawBuffer;
   lv_disp_drv_register(&displayDriver);
+  AppTheme::begin();
 
   static lv_indev_drv_t inputDriver;
   lv_indev_drv_init(&inputDriver);
