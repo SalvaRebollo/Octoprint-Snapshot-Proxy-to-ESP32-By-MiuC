@@ -13,5 +13,4 @@ void loop(bool tabActive);
 void onTabActivated();
 void onWifiConnectionChanged(bool connected);
 void hideControls();
-bool isFullscreen();
 }

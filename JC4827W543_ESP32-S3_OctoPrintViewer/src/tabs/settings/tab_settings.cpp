@@ -565,11 +565,7 @@ void createAppearancePage() {
   );
 #endif
 
-  lv_obj_t *bottomSpacer = lv_obj_create(appearancePage);
-  lv_obj_set_pos(bottomSpacer, 0, 515);
-  lv_obj_set_size(bottomSpacer, 1, 20);
-  lv_obj_set_style_bg_opa(bottomSpacer, LV_OPA_TRANSP, LV_PART_MAIN);
-  lv_obj_set_style_border_width(bottomSpacer, 0, LV_PART_MAIN);
+  appCreateSpacer(appearancePage, 0, 515, 1, 20);
 
   updateAppearanceUi();
   lv_obj_add_flag(appearancePage, LV_OBJ_FLAG_HIDDEN);

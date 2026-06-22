@@ -27,4 +27,10 @@ void create(lv_obj_t *parent) {
 
   appCreateButton(parent, "SUMAR", 135, 125, 180, 65, onCounterClick);
 }
+
+// Clears the UI pointer before the tab is destroyed. counterValue is kept on
+// purpose so the count is not lost when tabs are rebuilt.
+void detachUi() {
+  counterLabel = nullptr;
+}
 }

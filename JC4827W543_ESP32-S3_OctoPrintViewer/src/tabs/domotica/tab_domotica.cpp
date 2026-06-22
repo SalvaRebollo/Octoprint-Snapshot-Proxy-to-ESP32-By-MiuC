@@ -137,11 +137,7 @@ void create(lv_obj_t *parent) {
   lv_obj_set_style_text_align(statusLabel, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
   lv_obj_set_pos(statusLabel, 7, 75 + containerHeight);
 
-  lv_obj_t *bottomSpacer = lv_obj_create(parent);
-  lv_obj_set_pos(bottomSpacer, 0, 110 + containerHeight);
-  lv_obj_set_size(bottomSpacer, 1, 25);
-  lv_obj_set_style_bg_opa(bottomSpacer, LV_OPA_TRANSP, LV_PART_MAIN);
-  lv_obj_set_style_border_width(bottomSpacer, 0, LV_PART_MAIN);
+  appCreateSpacer(parent, 0, 110 + containerHeight, 1, 25);
 }
 
 void loop() {

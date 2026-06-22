@@ -20,9 +20,12 @@ JC4827W543_ESP32-S3_OctoPrintViewer/
         ├── octoprint/
         │   ├── tab_octoprint.h
         │   ├── tab_octoprint.cpp
-        │   └── features/
-        │       ├── octoprint_feature.h
-        │       └── octoprint_feature.cpp
+        │   ├── features/
+        │   │   ├── octoprint_feature.h
+        │   │   └── octoprint_feature.cpp
+        │   └── services/
+        │       ├── snapshot_service.h
+        │       └── snapshot_service.cpp
         ├── settings/
         │   ├── tab_settings.h
         │   ├── tab_settings.cpp
@@ -34,8 +37,7 @@ JC4827W543_ESP32-S3_OctoPrintViewer/
             ├── tab_domotica.cpp
             ├── features/
             │   ├── domotica_types.h
-            │   ├── domotica_config.h
-            │   └── domotica_config.example.h
+            │   └── domotica_config.h
             └── services/
                 ├── webhook_service.h
                 └── webhook_service.cpp
@@ -53,14 +55,20 @@ Arduino compila recursivamente los archivos `.cpp` que están dentro de `src/`.
 
 Cada tab conserva dentro de su carpeta sus propios `features/` y `services/`. Solo el código realmente compartido debe vivir en `src/core`.
 
+En OctoPrint la responsabilidad está dividida:
+
+- `features/octoprint_feature`: interfaz LVGL, configuración, persistencia en NVS y orquestación. Todo el código aquí se ejecuta en el hilo principal.
+- `services/snapshot_service`: motor de captura. Descarga el JPEG del proxy, lo decodifica en PSRAM con doble buffer y lo entrega al hilo principal desde una tarea de fondo. Esa tarea nunca toca LVGL: solo deja el frame listo y `octoprint_feature` lo aplica.
+
 ## Categorías de Ajustes
 
 La tab `Ajustes` funciona como índice y no contiene directamente los controles. Cada categoría abre una ventana independiente con cabecera y botón `VOLVER`.
 
 Las categorías actuales son:
 
-- `Apariencia`: modo claro/oscuro y color principal.
+- `Apariencia`: modo claro/oscuro, color principal, altura de la barra de pestañas, monitor de rendimiento y visibilidad de cada pestaña.
 - `WiFi`: estado de conexión, reconexión y gestión de redes guardadas.
+- `OctoPrint`: acceso a los parámetros del snapshot. Este botón solo aparece cuando la pestaña OctoPrint está visible.
 
 Para añadir futuras opciones, como Bluetooth, se crea una nueva página dentro de `tab_settings.cpp`, se añade su valor a `SettingsCategory` y se registra un botón en la pantalla índice.
 ## Tema claro y oscuro
@@ -68,6 +76,16 @@ Para añadir futuras opciones, como Bluetooth, se crea una nueva página dentro 
 `src/core/app_theme.h/.cpp` administra el tema general de LVGL. La preferencia se guarda en NVS dentro del namespace `appui`, usando la clave `dark`.
 
 El botón de la pestaña Ajustes aplica el cambio de modo inmediatamente. El selector de color modifica el color principal usado por botones, sliders y la línea de la tab activa. Ambas preferencias se escriben en NVS únicamente cuando el usuario cambia su control. Si todavía no existe una preferencia guardada, se utiliza el modo oscuro con color azul.
+
+En el mismo namespace `appui` se guardan también la altura de la barra (`tabheight`), el monitor de rendimiento (`showperf`), la visibilidad de cada pestaña (`tabcounter`, `tabdomotica`, `taboctoprint`) y la última pestaña activa (`lasttab`).
+
+## Recordar la última pestaña
+
+Al arrancar se restaura la última pestaña que se estaba usando. Se guarda un identificador lógico de la pestaña (`AppPage`), no su índice, en la clave `lasttab` del namespace `appui`. Reglas:
+
+- La pestaña Ajustes nunca se guarda como última: al entrar en Ajustes se conserva la última pestaña normal usada.
+- Solo se escribe en NVS cuando la pestaña activa cambia realmente.
+- Al arrancar, si la pestaña guardada está compilada, visible y disponible, se abre. Si no, se abre la primera pestaña visible que no sea Ajustes; y si no hay ninguna, se abre Ajustes.
 ## Desactivar módulos
 
 En `src/core/app_config.h`:
@@ -85,8 +103,10 @@ Cada opción elimina su tab y su lógica asociada del binario.
 2. Añade `tab_nueva.h` y `tab_nueva.cpp`.
 3. Si lo necesita, crea `features/` y `services/` dentro de esa misma carpeta.
 4. Expón como mínimo `create(lv_obj_t *parent)`.
-5. Registra la tab en `createApplicationUi()`.
+5. Registra la tab en `buildApplicationTabs()` (dentro del `.ino`), respetando el orden de creación. Ajustes se añade siempre la última.
 6. Si necesita ejecución periódica, expón `loop()` y llámalo desde el `loop()` principal.
+
+Las pestañas se reconstruyen al cambiar su visibilidad desde Ajustes. Si una pestaña conserva estado entre reconstrucciones, expón un `detachUi()` que solo invalide los punteros LVGL sin borrar ese estado (como hace `CounterTab`).
 
 ## Configurar acciones de Domótica
 
@@ -103,9 +123,9 @@ La pestaña Domótica crea automáticamente un botón por cada elemento. Para a�
 
 ## Seguridad
 
-`domotica_config.h` contiene los tokens privados y está excluido mediante `.gitignore`. `domotica_config.example.h` es la plantilla pública que sí puede subirse a GitHub.
+`src/tabs/domotica/features/domotica_config.h` forma parte del repositorio con valores de ejemplo genéricos (tipo `example.com`). La configuración real, con las URLs y tokens privados, se mantiene como una modificación local de ese mismo archivo que no se sube a GitHub.
 
-Antes de publicar, comprueba que el archivo privado continúa ignorado y que nunca se ha añadido previamente al historial de Git.
+Antes de publicar, comprueba que solo se suben los valores de ejemplo y que tus datos reales permanecen únicamente en tu copia local sin subir.
 
 La tarea de fondo nunca modifica objetos LVGL. Todas las actualizaciones visuales se realizan desde el hilo principal.
 

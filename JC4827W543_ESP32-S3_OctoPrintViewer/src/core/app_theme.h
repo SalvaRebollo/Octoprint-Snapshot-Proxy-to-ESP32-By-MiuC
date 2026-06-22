@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "app_navigation.h"
+
 namespace AppTheme {
 void begin();
 bool isDarkMode();
@@ -27,4 +29,8 @@ bool showDomoticaTab();
 bool setShowDomoticaTab(bool enabled);
 bool showOctoPrintTab();
 bool setShowOctoPrintTab(bool enabled);
+
+// Ultima pestaña normal activa, restaurada al arrancar. Ajustes nunca se guarda.
+AppPage lastActivePage();
+bool setLastActivePage(AppPage page);
 }

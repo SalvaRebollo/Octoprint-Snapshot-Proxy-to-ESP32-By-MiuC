@@ -43,7 +43,7 @@ Arduino_GFX *gfx = new Arduino_Canvas(
 );
 
 // ============================================================
-// BASE DE LA APLICACION
+// APPLICATION CORE
 // ============================================================
 
 static lv_disp_draw_buf_t drawBuffer;
@@ -158,8 +158,43 @@ void servicePerformanceMonitorSetting() {
   appApplyPerformanceMonitorVisibility();
 }
 
+bool isPageAvailable(AppPage page) {
+  switch (page) {
+    case AppPage::COUNTER: return counterTabIndex >= 0;
+    case AppPage::DOMOTICA: return domoticaTabIndex >= 0;
+    case AppPage::OCTOPRINT: return octoprintTabIndex >= 0;
+    case AppPage::SETTINGS: return settingsTabIndex >= 0;
+  }
+  return false;
+}
+
+// Returns the logical page that corresponds to the currently active tab index.
+AppPage activePageForIndex(int activeIndex) {
+  if (counterTabIndex >= 0 && activeIndex == counterTabIndex) return AppPage::COUNTER;
+  if (domoticaTabIndex >= 0 && activeIndex == domoticaTabIndex) return AppPage::DOMOTICA;
+  if (octoprintTabIndex >= 0 && activeIndex == octoprintTabIndex) return AppPage::OCTOPRINT;
+  return AppPage::SETTINGS;
+}
+
+/*
+ * Determines the tab to open on startup: the last remembered tab if available;
+ * otherwise the first visible tab that is not Settings; or Settings as a fallback.
+ */
+AppPage resolveStartupPage() {
+  AppPage stored = AppTheme::lastActivePage();
+  if (stored != AppPage::SETTINGS && isPageAvailable(stored)) return stored;
+
+  if (counterTabIndex >= 0) return AppPage::COUNTER;
+  if (domoticaTabIndex >= 0) return AppPage::DOMOTICA;
+  if (octoprintTabIndex >= 0) return AppPage::OCTOPRINT;
+  return AppPage::SETTINGS;
+}
+
 void onTabChanged(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
+
+  // Saves the active tab (AppTheme ignores Settings and skips redundant writes).
+  AppTheme::setLastActivePage(activePageForIndex(lv_tabview_get_tab_act(tabView)));
 
 #if APP_ENABLE_OCTOPRINT
   OctoPrintFeature::hideControls();
@@ -171,6 +206,7 @@ void onTabChanged(lv_event_t *event) {
 
 void buildApplicationTabs() {
   if (tabView != nullptr) {
+    CounterTab::detachUi();
 #if APP_ENABLE_OCTOPRINT
     OctoPrintFeature::detachTabUi();
 #endif
@@ -242,15 +278,7 @@ void createApplicationUi() {
 #endif
   SettingsTab::createOverlay();
 
-#if APP_ENABLE_OCTOPRINT
-  if (octoprintTabIndex >= 0) {
-    appShowPage(AppPage::OCTOPRINT, LV_ANIM_OFF);
-  } else {
-    appShowPage(AppPage::SETTINGS, LV_ANIM_OFF);
-  }
-#else
-  appShowPage(AppPage::SETTINGS, LV_ANIM_OFF);
-#endif
+  appShowPage(resolveStartupPage(), LV_ANIM_OFF);
 }
 // ============================================================
 // DRIVERS LVGL
@@ -344,7 +372,7 @@ bool initializeLvgl() {
 }
 
 // ============================================================
-// SETUP Y LOOP
+// SETUP AND LOOP
 // ============================================================
 
 void setup() {

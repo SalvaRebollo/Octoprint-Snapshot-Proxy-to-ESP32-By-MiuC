@@ -77,6 +77,7 @@ private:
   int findSavedNetwork(const String &ssid) const;
   void processScanResults(int resultCount);
   void buildCandidates();
+  void beginDirectConnect(uint8_t savedIndex);
   void connectCurrentCandidate();
   void tryNextCandidate();
   void setState(State newState);

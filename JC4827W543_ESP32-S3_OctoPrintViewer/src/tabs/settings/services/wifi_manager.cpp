@@ -146,13 +146,7 @@ bool WifiManager::saveAndConnect(
     return false;
   }
 
-  WiFi.scanDelete();
-  WiFi.disconnect(false, false);
-  candidateCount = 1;
-  candidateIndex = 0;
-  candidates[0].savedIndex = targetIndex;
-  candidates[0].rssi = -127;
-  connectCurrentCandidate();
+  beginDirectConnect(targetIndex);
   return true;
 }
 
@@ -160,13 +154,7 @@ bool WifiManager::connectSaved(const String &ssid) {
   int savedIndex = findSavedNetwork(ssid);
   if (savedIndex < 0) return false;
 
-  WiFi.scanDelete();
-  WiFi.disconnect(false, false);
-  candidateCount = 1;
-  candidateIndex = 0;
-  candidates[0].savedIndex = static_cast<uint8_t>(savedIndex);
-  candidates[0].rssi = -127;
-  connectCurrentCandidate();
+  beginDirectConnect(static_cast<uint8_t>(savedIndex));
   return true;
 }
 
@@ -369,6 +357,18 @@ void WifiManager::buildCandidates() {
     candidates[candidateCount].rssi = scanNetworks[scanIndex].rssi;
     candidateCount++;
   }
+}
+
+// Sets up a single candidate (a specific saved network) and starts the connection.
+// Shared initialization used by both saveAndConnect() and connectSaved().
+void WifiManager::beginDirectConnect(uint8_t savedIndex) {
+  WiFi.scanDelete();
+  WiFi.disconnect(false, false);
+  candidateCount = 1;
+  candidateIndex = 0;
+  candidates[0].savedIndex = savedIndex;
+  candidates[0].rssi = -127;
+  connectCurrentCandidate();
 }
 
 void WifiManager::connectCurrentCandidate() {

@@ -5,7 +5,6 @@
 
 #include <HTTPClient.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -49,26 +48,7 @@ Result executeRequest(uint8_t index) {
   http.setTimeout(8000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-  /*
-   * Los webhooks públicos actuales usan HTTPS + GET.
-   * Los webhooks locales de Home Assistant usan HTTP + POST.
-   */
-  if (strncmp(url, "https://", 8) == 0) {
-    WiFiClientSecure client;
-    client.setInsecure();
-
-    if (!http.begin(client, url)) {
-      Serial.printf(
-        "Webhook '%s': no se pudo iniciar HTTPS\n",
-        DOMOTICA_WEBHOOKS[index].title
-      );
-      return result;
-    }
-
-    result.httpCode = http.GET();
-    http.end();
-  }
-  else if (strncmp(url, "http://", 7) == 0) {
+  if (strncmp(url, "http://", 7) == 0) {
     WiFiClient client;
 
     if (!http.begin(client, url)) {
@@ -79,7 +59,7 @@ Result executeRequest(uint8_t index) {
       return result;
     }
 
-    // Home Assistant: petición POST con un JSON vacío válido.
+    // Home Assistant expects a POST with a valid empty JSON body.
     http.addHeader("Content-Type", "application/json");
     result.httpCode = http.POST("{}");
     http.end();
@@ -96,7 +76,7 @@ Result executeRequest(uint8_t index) {
     result.httpCode >= 200 &&
     result.httpCode < 300;
 
-  // Solo se muestra el título. La URL y sus tokens nunca se imprimen.
+  // Only the title is logged. The URL and its tokens are never printed.
   if (result.httpCode > 0) {
     Serial.printf(
       "Webhook '%s': HTTP %d\n",

@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 
-// Cambia a 0 para construir una plantilla sin la pantalla ni la logica OctoPrint.
+// Set to 0 to build a template without the OctoPrint display and logic.
 #define APP_ENABLE_OCTOPRINT 1
 #define APP_ENABLE_DOMOTICA 1
 

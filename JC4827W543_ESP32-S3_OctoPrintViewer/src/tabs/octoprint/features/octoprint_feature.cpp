@@ -3,22 +3,18 @@
 #if APP_ENABLE_OCTOPRINT
 #include "octoprint_feature.h"
 
-#include <HTTPClient.h>
-#include <JPEGDEC.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <string.h>
 #include <stdlib.h>
-#include <esp_heap_caps.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 
 #include "../../../core/app_navigation.h"
 #include "../../../core/app_ui.h"
+#include "../services/snapshot_service.h"
 
 namespace OctoPrintFeature {
 namespace {
-constexpr const char *SNAPSHOT_PATH = "/snapshot-lite.jpg";
+constexpr const char *NVS_NAMESPACE = "octoview";
 constexpr uint16_t DEFAULT_SNAPSHOT_PORT = 30113;
 constexpr size_t SNAPSHOT_IP_CAPACITY = 16;
 
@@ -42,28 +38,15 @@ constexpr float DEFAULT_ZOOM = 1.0f;
 constexpr float DEFAULT_X = 0.50f;
 constexpr float DEFAULT_Y = 0.50f;
 constexpr uint32_t DEFAULT_INTERVAL_MS = 1000;
+constexpr uint32_t INTERVAL_OPTIONS[] = {500, 1000, 2000, 5000};
+constexpr uint8_t INTERVAL_COUNT =
+  sizeof(INTERVAL_OPTIONS) / sizeof(INTERVAL_OPTIONS[0]);
+constexpr uint8_t DEFAULT_INTERVAL_INDEX = 1;
 constexpr bool DEFAULT_SHOW_CAMERA_STATUS = true;
 constexpr bool DEFAULT_SHOW_REQUEST_PARAMS = true;
 constexpr uint8_t DEFAULT_OVERLAY_POSITION = 0;
 constexpr float MOVE_STEP = 0.05f;
 constexpr float ZOOM_STEP = 0.2f;
-constexpr uint16_t MAX_CAMERA_WIDTH = 480;
-constexpr uint16_t MAX_CAMERA_HEIGHT = 272;
-constexpr size_t CAMERA_BUFFER_BYTES =
-  MAX_CAMERA_WIDTH * MAX_CAMERA_HEIGHT * sizeof(uint16_t);
-constexpr size_t MAX_JPEG_BYTES = 512 * 1024;
-
-struct SnapshotRequest {
-  char ip[SNAPSHOT_IP_CAPACITY];
-  uint16_t port;
-  uint16_t width;
-  uint16_t height;
-  uint8_t quality;
-  float zoom;
-  float x;
-  float y;
-  uint32_t cacheBust;
-};
 
 enum CameraAction : intptr_t {
   CAMERA_UP = 1,
@@ -136,26 +119,11 @@ lv_obj_t *showCameraStatusSwitch = nullptr;
 lv_obj_t *showRequestParamsSwitch = nullptr;
 lv_obj_t *overlayPositionDropdown = nullptr;
 
-uint16_t *frameBuffers[2] = {nullptr, nullptr};
-uint8_t *jpegBytes = nullptr;
+// LVGL descriptor for the displayed frame. The actual pixel buffers live in SnapshotService;
+// only the descriptor and the last frame dimensions are stored here for layout.
 lv_img_dsc_t cameraDescriptor = {};
-JPEGDEC jpegDecoder;
-int frontBufferIndex = 0;
-int pendingFrameIndex = -1;
-uint16_t pendingFrameWidth = 0;
-uint16_t pendingFrameHeight = 0;
 uint16_t displayedFrameWidth = 368;
 uint16_t displayedFrameHeight = 207;
-uint16_t *decodeTarget = nullptr;
-uint16_t decodeWidth = 0;
-uint16_t decodeHeight = 0;
-SnapshotRequest pendingRequest = {};
-TaskHandle_t snapshotTaskHandle = nullptr;
-portMUX_TYPE stateMux = portMUX_INITIALIZER_UNLOCKED;
-volatile bool downloadBusy = false;
-volatile bool frameReady = false;
-volatile bool workerStatusDirty = false;
-char workerStatus[96] = "";
 
 uint32_t lastSnapshotMs = 0;
 bool forceSnapshot = false;
@@ -174,20 +142,17 @@ float clampFloat(float value, float minimum, float maximum) {
 }
 
 uint32_t normalizeInterval(uint32_t value) {
-  if (value == 500 || value == 1000 || value == 2000 || value == 5000) {
-    return value;
+  for (uint8_t i = 0; i < INTERVAL_COUNT; i++) {
+    if (INTERVAL_OPTIONS[i] == value) return value;
   }
   return DEFAULT_INTERVAL_MS;
 }
 
 uint8_t intervalToDropdownIndex(uint32_t value) {
-  switch (value) {
-    case 500: return 0;
-    case 1000: return 1;
-    case 2000: return 2;
-    case 5000: return 3;
-    default: return 1;
+  for (uint8_t i = 0; i < INTERVAL_COUNT; i++) {
+    if (INTERVAL_OPTIONS[i] == value) return i;
   }
+  return DEFAULT_INTERVAL_INDEX;
 }
 
 bool isValidIpv4(const char *value) {
@@ -312,52 +277,6 @@ void applyOverlayVisibility() {
   }
 }
 
-void buildSnapshotUrl(
-  const SnapshotRequest &request,
-  char *url,
-  size_t urlCapacity
-) {
-  snprintf(
-    url,
-    urlCapacity,
-    "http://%s:%u%s?w=%u&h=%u&q=%u&zoom=%.1f&x=%.2f&y=%.2f&t=%lu",
-    request.ip,
-    request.port,
-    SNAPSHOT_PATH,
-    request.width,
-    request.height,
-    request.quality,
-    request.zoom,
-    request.x,
-    request.y,
-    static_cast<unsigned long>(request.cacheBust)
-  );
-}
-
-void setWorkerStatus(const char *text) {
-  portENTER_CRITICAL(&stateMux);
-  if (strncmp(workerStatus, text, sizeof(workerStatus)) != 0) {
-    snprintf(workerStatus, sizeof(workerStatus), "%s", text);
-    workerStatusDirty = true;
-  }
-  portEXIT_CRITICAL(&stateMux);
-}
-
-void applyWorkerStatus() {
-  char localStatus[96];
-  bool hasStatus = false;
-
-  portENTER_CRITICAL(&stateMux);
-  if (workerStatusDirty) {
-    snprintf(localStatus, sizeof(localStatus), "%s", workerStatus);
-    workerStatusDirty = false;
-    hasStatus = true;
-  }
-  portEXIT_CRITICAL(&stateMux);
-
-  if (hasStatus) setStatus(localStatus);
-}
-
 void setDefaultSettings() {
   resolutionIndex = DEFAULT_RESOLUTION_INDEX;
   cameraWidth = RESOLUTIONS[resolutionIndex].width;
@@ -375,7 +294,7 @@ void setDefaultSettings() {
 }
 
 void loadSettings() {
-  if (!preferences.begin("octoview", true)) {
+  if (!preferences.begin(NVS_NAMESPACE, true)) {
     Serial.println("No se pudo abrir NVS; se usaran valores por defecto");
     setDefaultSettings();
     return;
@@ -420,7 +339,7 @@ void loadSettings() {
 }
 
 bool saveSettings() {
-  if (!preferences.begin("octoview", false)) return false;
+  if (!preferences.begin(NVS_NAMESPACE, false)) return false;
 
   bool ok = true;
   ok &= preferences.putUChar("resolution", resolutionIndex) > 0;
@@ -748,13 +667,9 @@ void onResolutionChanged(lv_event_t *event) {
 
 void onIntervalChanged(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
-  switch (lv_dropdown_get_selected(intervalDropdown)) {
-    case 0: snapshotIntervalMs = 500; break;
-    case 1: snapshotIntervalMs = 1000; break;
-    case 2: snapshotIntervalMs = 2000; break;
-    case 3: snapshotIntervalMs = 5000; break;
-    default: snapshotIntervalMs = DEFAULT_INTERVAL_MS; break;
-  }
+  uint16_t selected = lv_dropdown_get_selected(intervalDropdown);
+  snapshotIntervalMs =
+    selected < INTERVAL_COUNT ? INTERVAL_OPTIONS[selected] : DEFAULT_INTERVAL_MS;
   markSettingsDirty();
   forceSnapshot = true;
 }
@@ -846,68 +761,25 @@ lv_obj_t *createActionButton(
   );
 }
 
-bool allocateCameraMemory() {
-  frameBuffers[0] = static_cast<uint16_t *>(
-    heap_caps_malloc(CAMERA_BUFFER_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-  );
-  frameBuffers[1] = static_cast<uint16_t *>(
-    heap_caps_malloc(CAMERA_BUFFER_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-  );
-  jpegBytes = static_cast<uint8_t *>(
-    heap_caps_malloc(MAX_JPEG_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
-  );
-
-  if (frameBuffers[0] == nullptr || frameBuffers[1] == nullptr || jpegBytes == nullptr) {
-    Serial.println("No se pudo reservar PSRAM para OctoPrint");
-    return false;
-  }
-
-  memset(frameBuffers[0], 0, CAMERA_BUFFER_BYTES);
-  memset(frameBuffers[1], 0, CAMERA_BUFFER_BYTES);
+void initCameraDescriptor() {
   cameraDescriptor.header.always_zero = 0;
   cameraDescriptor.header.w = displayedFrameWidth;
   cameraDescriptor.header.h = displayedFrameHeight;
   cameraDescriptor.header.cf = LV_IMG_CF_TRUE_COLOR;
   cameraDescriptor.data_size = displayedFrameWidth * displayedFrameHeight * sizeof(uint16_t);
-  cameraDescriptor.data = reinterpret_cast<const uint8_t *>(frameBuffers[frontBufferIndex]);
-  return true;
-}
-
-int drawJpegBlock(JPEGDRAW *draw) {
-  if (decodeTarget == nullptr) return 0;
-  if (draw->x >= decodeWidth || draw->y >= decodeHeight) return 1;
-
-  int sourceWidth = draw->iWidth;
-  int usableWidth = draw->iWidthUsed > 0 ? draw->iWidthUsed : draw->iWidth;
-  int copyWidth = min(usableWidth, static_cast<int>(decodeWidth) - draw->x);
-  int copyHeight = min(draw->iHeight, static_cast<int>(decodeHeight) - draw->y);
-
-  for (int row = 0; row < copyHeight; row++) {
-    uint16_t *destination = decodeTarget + ((draw->y + row) * decodeWidth) + draw->x;
-    uint16_t *source = draw->pPixels + (row * sourceWidth);
-    memcpy(destination, source, copyWidth * sizeof(uint16_t));
-  }
-  return 1;
-}
-
-bool isValidSnapshotRequest(const SnapshotRequest &request) {
-  return isValidIpv4(request.ip) && request.port > 0 &&
-    request.width > 0 && request.width <= MAX_CAMERA_WIDTH &&
-    request.height > 0 && request.height <= MAX_CAMERA_HEIGHT &&
-    request.quality >= 30 && request.quality <= 95 &&
-    isfinite(request.zoom) && request.zoom >= 1.0f && request.zoom <= 5.0f &&
-    isfinite(request.x) && request.x >= 0.0f && request.x <= 1.0f &&
-    isfinite(request.y) && request.y >= 0.0f && request.y <= 1.0f;
+  // The pixel pointer is set by applyPendingFrame on the first frame; the
+  // image is not shown until then, so it starts with no data.
+  cameraDescriptor.data = nullptr;
 }
 
 bool queueSnapshotRequest() {
-  if (snapshotTaskHandle == nullptr || WiFi.status() != WL_CONNECTED) return false;
+  if (WiFi.status() != WL_CONNECTED) return false;
   if (snapshotIp[0] == '\0') {
     setStatus("Configura la IP del proxy en PARAMETROS");
     return false;
   }
 
-  SnapshotRequest request = {};
+  SnapshotService::Request request = {};
   snprintf(request.ip, sizeof(request.ip), "%s", snapshotIp);
   request.port = snapshotPort;
   request.width = cameraWidth;
@@ -918,236 +790,47 @@ bool queueSnapshotRequest() {
   request.y = cameraY;
   request.cacheBust = millis();
 
-  bool queued = false;
-  portENTER_CRITICAL(&stateMux);
-  if (!downloadBusy && !frameReady) {
-    pendingRequest = request;
-    downloadBusy = true;
-    queued = true;
-  }
-  portEXIT_CRITICAL(&stateMux);
+  if (!SnapshotService::request(request)) return false;
 
-  if (queued) {
-    char requestUrl[320];
-    buildSnapshotUrl(request, requestUrl, sizeof(requestUrl));
-    const char *parameters = strchr(requestUrl, '?');
-    setRequestUrl(parameters != nullptr ? parameters : "");
-    xTaskNotifyGive(snapshotTaskHandle);
-  }
-  return queued;
+  char requestUrl[320];
+  SnapshotService::buildUrl(request, requestUrl, sizeof(requestUrl));
+  const char *parameters = strchr(requestUrl, '?');
+  setRequestUrl(parameters != nullptr ? parameters : "");
+  return true;
 }
 
 void applyPendingFrame() {
-  int newFrontIndex = -1;
-  uint16_t newWidth = 0;
-  uint16_t newHeight = 0;
-
-  portENTER_CRITICAL(&stateMux);
-  if (frameReady) {
-    newFrontIndex = pendingFrameIndex;
-    newWidth = pendingFrameWidth;
-    newHeight = pendingFrameHeight;
-  }
-  portEXIT_CRITICAL(&stateMux);
-
-  if (
-    newFrontIndex < 0 || newFrontIndex > 1 ||
-    newWidth == 0 || newWidth > MAX_CAMERA_WIDTH ||
-    newHeight == 0 || newHeight > MAX_CAMERA_HEIGHT
-  ) {
-    if (newFrontIndex >= 0) {
-      portENTER_CRITICAL(&stateMux);
-      pendingFrameIndex = -1;
-      frameReady = false;
-      portEXIT_CRITICAL(&stateMux);
-      setStatus("Frame descartado por dimensiones invalidas");
-    }
-    return;
-  }
+  SnapshotService::FrameView frame;
+  if (!SnapshotService::takeReadyFrame(frame)) return;
 
   lv_img_cache_invalidate_src(&cameraDescriptor);
-  displayedFrameWidth = newWidth;
-  displayedFrameHeight = newHeight;
-  cameraDescriptor.header.w = newWidth;
-  cameraDescriptor.header.h = newHeight;
-  cameraDescriptor.data_size = newWidth * newHeight * sizeof(uint16_t);
-  cameraDescriptor.data = reinterpret_cast<const uint8_t *>(frameBuffers[newFrontIndex]);
+  displayedFrameWidth = frame.width;
+  displayedFrameHeight = frame.height;
+  cameraDescriptor.header.w = frame.width;
+  cameraDescriptor.header.h = frame.height;
+  cameraDescriptor.data_size = frame.width * frame.height * sizeof(uint16_t);
+  cameraDescriptor.data = reinterpret_cast<const uint8_t *>(frame.pixels);
   if (cameraImage != nullptr) lv_img_set_src(cameraImage, &cameraDescriptor);
   if (fullscreenImage != nullptr) lv_img_set_src(fullscreenImage, &cameraDescriptor);
   updateImageLayout();
   if (cameraImage != nullptr) lv_obj_invalidate(cameraImage);
   if (fullscreenImage != nullptr) lv_obj_invalidate(fullscreenImage);
 
-  portENTER_CRITICAL(&stateMux);
-  frontBufferIndex = newFrontIndex;
-  pendingFrameIndex = -1;
-  frameReady = false;
-  portEXIT_CRITICAL(&stateMux);
-}
-
-bool downloadAndDecodeSnapshot(const SnapshotRequest &request, int targetBufferIndex) {
-  if (
-    targetBufferIndex < 0 || targetBufferIndex > 1 ||
-    frameBuffers[targetBufferIndex] == nullptr ||
-    !isValidSnapshotRequest(request)
-  ) {
-    setWorkerStatus("Peticion de captura invalida");
-    return false;
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    setWorkerStatus("WiFi desconectado");
-    return false;
-  }
-
-  char url[320];
-  buildSnapshotUrl(request, url, sizeof(url));
-  Serial.println(url);
-
-  WiFiClient client;
-  HTTPClient http;
-  http.setConnectTimeout(3000);
-  http.setTimeout(5000);
-
-  if (!http.begin(client, url)) {
-    setWorkerStatus("No se pudo abrir la URL");
-    return false;
-  }
-
-  http.useHTTP10(true);
-  http.addHeader("Cache-Control", "no-cache");
-  int httpCode = http.GET();
-  if (httpCode != HTTP_CODE_OK) {
-    Serial.printf("Error HTTP: %d\n", httpCode);
-    http.end();
-    setWorkerStatus("Error HTTP descargando captura");
-    return false;
-  }
-
-  int contentLength = http.getSize();
-  if (contentLength <= 0 || static_cast<size_t>(contentLength) > MAX_JPEG_BYTES) {
-    Serial.printf("Tamano JPEG invalido: %d\n", contentLength);
-    http.end();
-    setWorkerStatus("JPEG demasiado grande o sin tamano");
-    return false;
-  }
-
-  WiFiClient *stream = http.getStreamPtr();
-  size_t totalRead = 0;
-  uint32_t lastDataAt = millis();
-  while (totalRead < static_cast<size_t>(contentLength)) {
-    int availableBytes = stream->available();
-    if (availableBytes > 0) {
-      size_t remaining = static_cast<size_t>(contentLength) - totalRead;
-      size_t bytesToRead = min(static_cast<size_t>(availableBytes), remaining);
-      int bytesRead = stream->read(jpegBytes + totalRead, bytesToRead);
-      if (bytesRead > 0) {
-        totalRead += bytesRead;
-        lastDataAt = millis();
-      }
-    } else {
-      if (millis() - lastDataAt > 5000) break;
-      vTaskDelay(pdMS_TO_TICKS(1));
-    }
-  }
-  http.end();
-
-  if (totalRead != static_cast<size_t>(contentLength)) {
-    Serial.printf("JPEG incompleto: %u/%d bytes\n", static_cast<unsigned>(totalRead), contentLength);
-    setWorkerStatus("Captura JPEG incompleta");
-    return false;
-  }
-
-  decodeTarget = frameBuffers[targetBufferIndex];
-  decodeWidth = request.width;
-  decodeHeight = request.height;
-  memset(decodeTarget, 0, CAMERA_BUFFER_BYTES);
-
-  if (!jpegDecoder.openRAM(jpegBytes, static_cast<int>(totalRead), drawJpegBlock)) {
-    Serial.printf("Error abriendo JPEG: %d\n", jpegDecoder.getLastError());
-    decodeTarget = nullptr;
-    decodeWidth = 0;
-    decodeHeight = 0;
-    setWorkerStatus("La captura no es un JPEG valido");
-    return false;
-  }
-
-  if (jpegDecoder.getWidth() != request.width || jpegDecoder.getHeight() != request.height) {
-    Serial.printf("Resolucion inesperada: %dx%d\n", jpegDecoder.getWidth(), jpegDecoder.getHeight());
-    jpegDecoder.close();
-    decodeTarget = nullptr;
-    decodeWidth = 0;
-    decodeHeight = 0;
-    setWorkerStatus("Resolucion JPEG inesperada");
-    return false;
-  }
-
-  jpegDecoder.setPixelType(RGB565_BIG_ENDIAN);
-  int decoded = jpegDecoder.decode(0, 0, 0);
-  int jpegError = jpegDecoder.getLastError();
-  jpegDecoder.close();
-  decodeTarget = nullptr;
-  decodeWidth = 0;
-  decodeHeight = 0;
-
-  if (!decoded) {
-    Serial.printf("Error decodificando JPEG: %d\n", jpegError);
-    setWorkerStatus("Error decodificando JPEG");
-    return false;
-  }
-  return true;
-}
-
-void snapshotTask(void *) {
-  for (;;) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    SnapshotRequest request;
-    int targetBufferIndex;
-
-    portENTER_CRITICAL(&stateMux);
-    request = pendingRequest;
-    targetBufferIndex = 1 - frontBufferIndex;
-    portEXIT_CRITICAL(&stateMux);
-
-    bool success = downloadAndDecodeSnapshot(request, targetBufferIndex);
-
-    portENTER_CRITICAL(&stateMux);
-    if (success) {
-      pendingFrameIndex = targetBufferIndex;
-      pendingFrameWidth = request.width;
-      pendingFrameHeight = request.height;
-      frameReady = true;
-    }
-    downloadBusy = false;
-    portEXIT_CRITICAL(&stateMux);
-
-    if (success) setWorkerStatus("Camara activa - toca para controles");
-  }
+  // The buffer swap is confirmed only after LVGL has finished painting.
+  SnapshotService::commitFrame();
 }
 }
 
 bool begin() {
   loadSettings();
-  return allocateCameraMemory();
+  if (!SnapshotService::begin()) return false;
+  initCameraDescriptor();
+  return true;
 }
 
 void startWorker() {
-  if (snapshotTaskHandle != nullptr) return;
-
-  BaseType_t result = xTaskCreatePinnedToCore(
-    snapshotTask,
-    "snapshotTask",
-    16384,
-    nullptr,
-    1,
-    &snapshotTaskHandle,
-    0
-  );
-
-  if (result != pdPASS) {
-    snapshotTaskHandle = nullptr;
+  if (!SnapshotService::startWorker()) {
     setStatus("No se pudo crear la tarea de camara");
-    Serial.println("No se pudo crear snapshotTask");
   }
 }
 
@@ -1345,11 +1028,7 @@ lv_coord_t createSettingsSection(lv_obj_t *parent, lv_coord_t startY) {
   lv_obj_set_pos(savedStatus, 10, startY + 527);
   setReadableText(savedStatus);
 
-  lv_obj_t *bottomSpacer = lv_obj_create(parent);
-  lv_obj_set_pos(bottomSpacer, 0, startY + 580);
-  lv_obj_set_size(bottomSpacer, 1, 25);
-  lv_obj_set_style_bg_opa(bottomSpacer, LV_OPA_TRANSP, LV_PART_MAIN);
-  lv_obj_set_style_border_width(bottomSpacer, 0, LV_PART_MAIN);
+  appCreateSpacer(parent, 0, startY + 580, 1, 25);
 
   syncEndpointControls();
   syncParameterControls();
@@ -1489,7 +1168,8 @@ void showSettings() {
 }
 
 void loop(bool tabActive) {
-  applyWorkerStatus();
+  char status[96];
+  if (SnapshotService::takeStatus(status, sizeof(status))) setStatus(status);
   applyPendingFrame();
 
   bool shouldUpdate = tabActive || fullscreenActive;
@@ -1524,10 +1204,6 @@ void onWifiConnectionChanged(bool connected) {
 
 void hideControls() {
   if (cameraControls != nullptr) lv_obj_add_flag(cameraControls, LV_OBJ_FLAG_HIDDEN);
-}
-
-bool isFullscreen() {
-  return fullscreenActive;
 }
 }
 #endif

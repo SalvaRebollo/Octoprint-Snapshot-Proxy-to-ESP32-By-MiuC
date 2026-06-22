@@ -15,6 +15,7 @@ constexpr const char *NVS_PERF_MONITOR_KEY = "showperf";
 constexpr const char *NVS_COUNTER_TAB_KEY = "tabcounter";
 constexpr const char *NVS_DOMOTICA_TAB_KEY = "tabdomotica";
 constexpr const char *NVS_OCTOPRINT_TAB_KEY = "taboctoprint";
+constexpr const char *NVS_LAST_TAB_KEY = "lasttab";
 constexpr bool DEFAULT_DARK_MODE = true;
 constexpr uint8_t DEFAULT_PRIMARY_COLOR = 0;
 constexpr uint16_t MIN_TAB_BAR_HEIGHT = 20;
@@ -23,13 +24,14 @@ constexpr bool DEFAULT_SHOW_PERFORMANCE_MONITOR = true;
 constexpr bool DEFAULT_SHOW_COUNTER_TAB = false;
 constexpr bool DEFAULT_SHOW_DOMOTICA_TAB = true;
 constexpr bool DEFAULT_SHOW_OCTOPRINT_TAB = true;
+constexpr AppPage DEFAULT_LAST_ACTIVE_PAGE = AppPage::OCTOPRINT;
 
 struct PrimaryColor {
   const char *name;
   uint32_t rgb;
 };
 
-// Tonos deliberadamente oscuros para mantener contraste con texto blanco.
+// Intentionally dark shades to keep enough contrast against white text.
 constexpr PrimaryColor PRIMARY_COLORS[] = {
   {"Azul",     0x1565C0},
   {"Verde",    0x2E7D32},
@@ -49,6 +51,7 @@ bool performanceMonitorVisible = DEFAULT_SHOW_PERFORMANCE_MONITOR;
 bool counterTabVisible = DEFAULT_SHOW_COUNTER_TAB;
 bool domoticaTabVisible = DEFAULT_SHOW_DOMOTICA_TAB;
 bool octoPrintTabVisible = DEFAULT_SHOW_OCTOPRINT_TAB;
+AppPage lastActivePageValue = DEFAULT_LAST_ACTIVE_PAGE;
 
 bool isValidPrimaryColor(uint8_t index) {
   return index < PRIMARY_COLOR_COUNT;
@@ -79,26 +82,27 @@ void apply() {
   if (screen != nullptr) lv_obj_invalidate(screen);
 }
 
-bool saveDarkMode() {
+// Writes a single preference value to NVS (one value per key).
+bool writePreference(const char *key, bool value) {
   Preferences preferences;
   if (!preferences.begin(NVS_NAMESPACE, false)) return false;
-  size_t written = preferences.putBool(NVS_DARK_KEY, darkMode);
+  size_t written = preferences.putBool(key, value);
   preferences.end();
   return written > 0;
 }
 
-bool savePrimaryColor() {
+bool writePreference(const char *key, uint8_t value) {
   Preferences preferences;
   if (!preferences.begin(NVS_NAMESPACE, false)) return false;
-  size_t written = preferences.putUChar(NVS_COLOR_KEY, selectedPrimaryColor);
+  size_t written = preferences.putUChar(key, value);
   preferences.end();
   return written > 0;
 }
 
-bool saveTabBarHeight() {
+bool writePreference(const char *key, uint16_t value) {
   Preferences preferences;
   if (!preferences.begin(NVS_NAMESPACE, false)) return false;
-  size_t written = preferences.putUShort(NVS_TAB_HEIGHT_KEY, selectedTabBarHeight);
+  size_t written = preferences.putUShort(key, value);
   preferences.end();
   return written > 0;
 }
@@ -132,16 +136,16 @@ void begin() {
       NVS_OCTOPRINT_TAB_KEY,
       DEFAULT_SHOW_OCTOPRINT_TAB
     );
+    uint8_t storedPage = preferences.getUChar(
+      NVS_LAST_TAB_KEY,
+      static_cast<uint8_t>(DEFAULT_LAST_ACTIVE_PAGE)
+    );
+    lastActivePageValue = storedPage <= static_cast<uint8_t>(AppPage::SETTINGS)
+      ? static_cast<AppPage>(storedPage)
+      : DEFAULT_LAST_ACTIVE_PAGE;
     preferences.end();
-  } else {
-    darkMode = DEFAULT_DARK_MODE;
-    selectedPrimaryColor = DEFAULT_PRIMARY_COLOR;
-    selectedTabBarHeight = APP_TAB_BAR_HEIGHT;
-    performanceMonitorVisible = DEFAULT_SHOW_PERFORMANCE_MONITOR;
-    counterTabVisible = DEFAULT_SHOW_COUNTER_TAB;
-    domoticaTabVisible = DEFAULT_SHOW_DOMOTICA_TAB;
-    octoPrintTabVisible = DEFAULT_SHOW_OCTOPRINT_TAB;
   }
+  // If NVS fails to open, all variables keep their initial default values.
 
   if (!isValidPrimaryColor(selectedPrimaryColor)) {
     selectedPrimaryColor = DEFAULT_PRIMARY_COLOR;
@@ -160,7 +164,7 @@ bool setDarkMode(bool enabled) {
   if (darkMode == enabled) return true;
   darkMode = enabled;
   apply();
-  return saveDarkMode();
+  return writePreference(NVS_DARK_KEY, darkMode);
 }
 
 bool toggle() {
@@ -185,7 +189,7 @@ bool setPrimaryColor(uint8_t index) {
   if (selectedPrimaryColor == index) return true;
   selectedPrimaryColor = index;
   apply();
-  return savePrimaryColor();
+  return writePreference(NVS_COLOR_KEY, selectedPrimaryColor);
 }
 
 uint16_t tabBarHeight() {
@@ -204,25 +208,17 @@ bool setTabBarHeight(uint16_t height) {
   if (!isValidTabBarHeight(height)) return false;
   if (selectedTabBarHeight == height) return true;
   selectedTabBarHeight = height;
-  return saveTabBarHeight();
+  return writePreference(NVS_TAB_HEIGHT_KEY, selectedTabBarHeight);
 }
 
 bool showPerformanceMonitor() {
   return performanceMonitorVisible;
 }
 
-bool saveVisibility(const char *key, bool value) {
-  Preferences preferences;
-  if (!preferences.begin(NVS_NAMESPACE, false)) return false;
-  size_t written = preferences.putBool(key, value);
-  preferences.end();
-  return written > 0;
-}
-
 bool setShowPerformanceMonitor(bool enabled) {
   if (performanceMonitorVisible == enabled) return true;
   performanceMonitorVisible = enabled;
-  return saveVisibility(NVS_PERF_MONITOR_KEY, performanceMonitorVisible);
+  return writePreference(NVS_PERF_MONITOR_KEY, performanceMonitorVisible);
 }
 
 bool showCounterTab() {
@@ -232,7 +228,7 @@ bool showCounterTab() {
 bool setShowCounterTab(bool enabled) {
   if (counterTabVisible == enabled) return true;
   counterTabVisible = enabled;
-  return saveVisibility(NVS_COUNTER_TAB_KEY, counterTabVisible);
+  return writePreference(NVS_COUNTER_TAB_KEY, counterTabVisible);
 }
 
 bool showDomoticaTab() {
@@ -242,7 +238,7 @@ bool showDomoticaTab() {
 bool setShowDomoticaTab(bool enabled) {
   if (domoticaTabVisible == enabled) return true;
   domoticaTabVisible = enabled;
-  return saveVisibility(NVS_DOMOTICA_TAB_KEY, domoticaTabVisible);
+  return writePreference(NVS_DOMOTICA_TAB_KEY, domoticaTabVisible);
 }
 
 bool showOctoPrintTab() {
@@ -252,6 +248,18 @@ bool showOctoPrintTab() {
 bool setShowOctoPrintTab(bool enabled) {
   if (octoPrintTabVisible == enabled) return true;
   octoPrintTabVisible = enabled;
-  return saveVisibility(NVS_OCTOPRINT_TAB_KEY, octoPrintTabVisible);
+  return writePreference(NVS_OCTOPRINT_TAB_KEY, octoPrintTabVisible);
+}
+
+AppPage lastActivePage() {
+  return lastActivePageValue;
+}
+
+bool setLastActivePage(AppPage page) {
+  // Settings is never saved as the last tab; the last normal tab is kept instead.
+  if (page == AppPage::SETTINGS) return true;
+  if (lastActivePageValue == page) return true;
+  lastActivePageValue = page;
+  return writePreference(NVS_LAST_TAB_KEY, static_cast<uint8_t>(page));
 }
 }
