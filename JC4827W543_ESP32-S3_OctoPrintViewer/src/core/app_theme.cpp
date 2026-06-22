@@ -15,16 +15,29 @@ constexpr const char *NVS_PERF_MONITOR_KEY = "showperf";
 constexpr const char *NVS_COUNTER_TAB_KEY = "tabcounter";
 constexpr const char *NVS_DOMOTICA_TAB_KEY = "tabdomotica";
 constexpr const char *NVS_OCTOPRINT_TAB_KEY = "taboctoprint";
-constexpr const char *NVS_LAST_TAB_KEY = "lasttab";
-constexpr bool DEFAULT_DARK_MODE = true;
-constexpr uint8_t DEFAULT_PRIMARY_COLOR = 0;
-constexpr uint16_t MIN_TAB_BAR_HEIGHT = 20;
-constexpr uint16_t MAX_TAB_BAR_HEIGHT = 50;
-constexpr bool DEFAULT_SHOW_PERFORMANCE_MONITOR = true;
-constexpr bool DEFAULT_SHOW_COUNTER_TAB = false;
-constexpr bool DEFAULT_SHOW_DOMOTICA_TAB = true;
-constexpr bool DEFAULT_SHOW_OCTOPRINT_TAB = true;
-constexpr AppPage DEFAULT_LAST_ACTIVE_PAGE = AppPage::OCTOPRINT;
+constexpr const char *NVS_LAST_TAB_KEY        = "lasttab";
+constexpr const char *NVS_BRIGHTNESS_KEY      = "bright";
+constexpr const char *NVS_DIM_BRIGHTNESS_KEY  = "dimval";
+constexpr const char *NVS_DIM_TIMEOUT_KEY     = "dimsecs";
+constexpr const char *NVS_CLOCK_TIMEOUT_KEY   = "clksecs";
+constexpr const char *NVS_CLOCK_TAB_KEY       = "tabclock";
+constexpr bool    DEFAULT_DARK_MODE               = true;
+constexpr uint8_t DEFAULT_PRIMARY_COLOR           = 0;
+constexpr uint16_t MIN_TAB_BAR_HEIGHT             = 20;
+constexpr uint16_t MAX_TAB_BAR_HEIGHT             = 50;
+constexpr bool    DEFAULT_SHOW_PERFORMANCE_MONITOR = true;
+constexpr bool    DEFAULT_SHOW_COUNTER_TAB         = false;
+constexpr bool    DEFAULT_SHOW_DOMOTICA_TAB        = true;
+constexpr bool    DEFAULT_SHOW_OCTOPRINT_TAB       = true;
+constexpr bool    DEFAULT_SHOW_CLOCK_TAB           = false;
+constexpr AppPage DEFAULT_LAST_ACTIVE_PAGE         = AppPage::OCTOPRINT;
+constexpr uint8_t DEFAULT_BRIGHTNESS               = 100;
+constexpr uint8_t MIN_BRIGHTNESS                   = 10;
+constexpr uint8_t DEFAULT_DIM_BRIGHTNESS           = 20;
+constexpr uint8_t MIN_DIM_BRIGHTNESS               = 5;
+constexpr uint8_t MAX_DIM_BRIGHTNESS               = 80;
+constexpr uint16_t DEFAULT_DIM_TIMEOUT_SECS        = 0;
+constexpr uint16_t DEFAULT_CLOCK_TIMEOUT_SECS      = 0;
 
 struct PrimaryColor {
   const char *name;
@@ -51,7 +64,12 @@ bool performanceMonitorVisible = DEFAULT_SHOW_PERFORMANCE_MONITOR;
 bool counterTabVisible = DEFAULT_SHOW_COUNTER_TAB;
 bool domoticaTabVisible = DEFAULT_SHOW_DOMOTICA_TAB;
 bool octoPrintTabVisible = DEFAULT_SHOW_OCTOPRINT_TAB;
+bool clockTabVisible     = DEFAULT_SHOW_CLOCK_TAB;
 AppPage lastActivePageValue = DEFAULT_LAST_ACTIVE_PAGE;
+uint8_t  brightnessValue    = DEFAULT_BRIGHTNESS;
+uint8_t  dimBrightnessValue = DEFAULT_DIM_BRIGHTNESS;
+uint16_t dimTimeoutValue    = DEFAULT_DIM_TIMEOUT_SECS;
+uint16_t clockTimeoutValue  = DEFAULT_CLOCK_TIMEOUT_SECS;
 
 bool isValidPrimaryColor(uint8_t index) {
   return index < PRIMARY_COLOR_COUNT;
@@ -136,13 +154,21 @@ void begin() {
       NVS_OCTOPRINT_TAB_KEY,
       DEFAULT_SHOW_OCTOPRINT_TAB
     );
+    clockTabVisible = preferences.getBool(
+      NVS_CLOCK_TAB_KEY,
+      DEFAULT_SHOW_CLOCK_TAB
+    );
     uint8_t storedPage = preferences.getUChar(
       NVS_LAST_TAB_KEY,
       static_cast<uint8_t>(DEFAULT_LAST_ACTIVE_PAGE)
     );
-    lastActivePageValue = storedPage <= static_cast<uint8_t>(AppPage::SETTINGS)
+    lastActivePageValue = storedPage <= static_cast<uint8_t>(AppPage::CLOCK)
       ? static_cast<AppPage>(storedPage)
       : DEFAULT_LAST_ACTIVE_PAGE;
+    brightnessValue = preferences.getUChar(NVS_BRIGHTNESS_KEY, DEFAULT_BRIGHTNESS);
+    dimBrightnessValue = preferences.getUChar(NVS_DIM_BRIGHTNESS_KEY, DEFAULT_DIM_BRIGHTNESS);
+    dimTimeoutValue  = preferences.getUShort(NVS_DIM_TIMEOUT_KEY,   DEFAULT_DIM_TIMEOUT_SECS);
+    clockTimeoutValue = preferences.getUShort(NVS_CLOCK_TIMEOUT_KEY, DEFAULT_CLOCK_TIMEOUT_SECS);
     preferences.end();
   }
   // If NVS fails to open, all variables keep their initial default values.
@@ -256,10 +282,52 @@ AppPage lastActivePage() {
 }
 
 bool setLastActivePage(AppPage page) {
-  // Settings is never saved as the last tab; the last normal tab is kept instead.
-  if (page == AppPage::SETTINGS) return true;
+  // Settings and Clock are never saved as last tab.
+  if (page == AppPage::SETTINGS || page == AppPage::CLOCK) return true;
   if (lastActivePageValue == page) return true;
   lastActivePageValue = page;
   return writePreference(NVS_LAST_TAB_KEY, static_cast<uint8_t>(page));
+}
+
+bool showClockTab() { return clockTabVisible; }
+
+bool setShowClockTab(bool enabled) {
+  if (clockTabVisible == enabled) return true;
+  clockTabVisible = enabled;
+  return writePreference(NVS_CLOCK_TAB_KEY, clockTabVisible);
+}
+
+uint8_t brightness() { return brightnessValue; }
+
+bool setBrightness(uint8_t percent) {
+  if (percent < MIN_BRIGHTNESS) percent = MIN_BRIGHTNESS;
+  if (percent > 100) percent = 100;
+  brightnessValue = percent;
+  return writePreference(NVS_BRIGHTNESS_KEY, brightnessValue);
+}
+
+uint8_t dimBrightness() { return dimBrightnessValue; }
+
+bool setDimBrightness(uint8_t percent) {
+  if (percent < MIN_DIM_BRIGHTNESS) percent = MIN_DIM_BRIGHTNESS;
+  if (percent > MAX_DIM_BRIGHTNESS) percent = MAX_DIM_BRIGHTNESS;
+  dimBrightnessValue = percent;
+  return writePreference(NVS_DIM_BRIGHTNESS_KEY, dimBrightnessValue);
+}
+
+uint16_t dimTimeoutSecs() { return dimTimeoutValue; }
+
+bool setDimTimeoutSecs(uint16_t secs) {
+  if (dimTimeoutValue == secs) return true;
+  dimTimeoutValue = secs;
+  return writePreference(NVS_DIM_TIMEOUT_KEY, dimTimeoutValue);
+}
+
+uint16_t clockTimeoutSecs() { return clockTimeoutValue; }
+
+bool setClockTimeoutSecs(uint16_t secs) {
+  if (clockTimeoutValue == secs) return true;
+  clockTimeoutValue = secs;
+  return writePreference(NVS_CLOCK_TIMEOUT_KEY, clockTimeoutValue);
 }
 }

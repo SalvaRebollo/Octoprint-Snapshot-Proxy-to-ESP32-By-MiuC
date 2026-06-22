@@ -30,7 +30,26 @@ bool setShowDomoticaTab(bool enabled);
 bool showOctoPrintTab();
 bool setShowOctoPrintTab(bool enabled);
 
-// Ultima pestaña normal activa, restaurada al arrancar. Ajustes nunca se guarda.
+bool showClockTab();
+bool setShowClockTab(bool enabled);
+
+// Screen brightness (10–100 %). Saved to NVS.
+uint8_t brightness();
+bool    setBrightness(uint8_t percent);
+
+// Brightness used when dimmed by inactivity (5–80 %).
+uint8_t dimBrightness();
+bool    setDimBrightness(uint8_t percent);
+
+// Seconds of inactivity before dimming (0 = disabled).
+uint16_t dimTimeoutSecs();
+bool     setDimTimeoutSecs(uint16_t secs);
+
+// Seconds of inactivity before switching to the clock tab (0 = disabled).
+uint16_t clockTimeoutSecs();
+bool     setClockTimeoutSecs(uint16_t secs);
+
+// Last normal active tab, restored on boot. Settings and Clock are never saved.
 AppPage lastActivePage();
 bool setLastActivePage(AppPage page);
 }

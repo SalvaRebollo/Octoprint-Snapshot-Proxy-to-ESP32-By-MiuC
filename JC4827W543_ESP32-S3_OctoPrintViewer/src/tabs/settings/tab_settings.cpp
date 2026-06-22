@@ -1,7 +1,9 @@
 #include "tab_settings.h"
 
 #include <WiFi.h>
+#include <time.h>
 
+#include "../../core/app_backlight.h"
 #include "../../core/app_config.h"
 #include "../../core/app_navigation.h"
 #include "../../core/app_theme.h"
@@ -17,13 +19,31 @@ namespace {
 enum class SettingsCategory : intptr_t {
   APPEARANCE = 1,
   WIFI,
-  OCTOPRINT
+  OCTOPRINT,
+  SYSTEM
 };
+
+constexpr uint16_t TIMEOUT_VALUES[] = {0, 30, 60, 120, 300, 600};
+constexpr uint8_t  TIMEOUT_COUNT    = sizeof(TIMEOUT_VALUES) / sizeof(TIMEOUT_VALUES[0]);
+constexpr const char *TIMEOUT_OPTIONS =
+  "Desactivado\n30 segundos\n1 minuto\n2 minutos\n5 minutos\n10 minutos";
+
+uint8_t secsToTimeoutIndex(uint16_t secs) {
+  for (uint8_t i = 0; i < TIMEOUT_COUNT; i++) {
+    if (TIMEOUT_VALUES[i] == secs) return i;
+  }
+  return 0;
+}
+
+uint16_t timeoutIndexToSecs(uint16_t index) {
+  return index < TIMEOUT_COUNT ? TIMEOUT_VALUES[index] : 0;
+}
 
 lv_obj_t *categoryLayer = nullptr;
 lv_obj_t *categoryTitle = nullptr;
 lv_obj_t *appearancePage = nullptr;
 lv_obj_t *wifiPage = nullptr;
+lv_obj_t *systemPage = nullptr;
 
 lv_obj_t *themeButton = nullptr;
 lv_obj_t *themeStatus = nullptr;
@@ -34,6 +54,14 @@ lv_obj_t *performanceMonitorSwitch = nullptr;
 lv_obj_t *counterTabSwitch = nullptr;
 lv_obj_t *domoticaTabSwitch = nullptr;
 lv_obj_t *octoPrintTabSwitch = nullptr;
+lv_obj_t *clockTabSwitch = nullptr;
+
+lv_obj_t *brightnessSlider = nullptr;
+lv_obj_t *brightnessValueLabel = nullptr;
+lv_obj_t *dimBrightnessSlider = nullptr;
+lv_obj_t *dimBrightnessValueLabel = nullptr;
+lv_obj_t *dimTimeoutDropdown = nullptr;
+lv_obj_t *clockTimeoutDropdown = nullptr;
 
 lv_obj_t *wifiStatus = nullptr;
 lv_obj_t *ipStatus = nullptr;
@@ -105,6 +133,10 @@ void updateAppearanceUi(bool saved = true) {
     else lv_obj_clear_state(octoPrintTabSwitch, LV_STATE_CHECKED);
   }
 #endif
+  if (clockTabSwitch != nullptr) {
+    if (AppTheme::showClockTab()) lv_obj_add_state(clockTabSwitch, LV_STATE_CHECKED);
+    else lv_obj_clear_state(clockTabSwitch, LV_STATE_CHECKED);
+  }
 
   if (themeStatus != nullptr) {
     if (!saved) {
@@ -157,6 +189,9 @@ void onTabVisibilityChanged(lv_event_t *event) {
     saved = AppTheme::setShowOctoPrintTab(visible);
   }
 #endif
+  else if (target == clockTabSwitch) {
+    saved = AppTheme::setShowClockTab(visible);
+  }
   else {
     return;
   }
@@ -193,13 +228,15 @@ void showCategory(SettingsCategory category) {
     categoryLayer == nullptr ||
     categoryTitle == nullptr ||
     appearancePage == nullptr ||
-    wifiPage == nullptr
+    wifiPage == nullptr ||
+    systemPage == nullptr
   ) {
     return;
   }
 
   lv_obj_add_flag(appearancePage, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(wifiPage, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(systemPage, LV_OBJ_FLAG_HIDDEN);
 
   switch (category) {
     case SettingsCategory::APPEARANCE:
@@ -220,6 +257,11 @@ void showCategory(SettingsCategory category) {
       OctoPrintFeature::showSettings();
 #endif
       return;
+
+    case SettingsCategory::SYSTEM:
+      lv_label_set_text(categoryTitle, "Ajustes del sistema");
+      lv_obj_clear_flag(systemPage, LV_OBJ_FLAG_HIDDEN);
+      break;
   }
 
   lv_obj_clear_flag(categoryLayer, LV_OBJ_FLAG_HIDDEN);
@@ -565,10 +607,159 @@ void createAppearancePage() {
   );
 #endif
 
-  appCreateSpacer(appearancePage, 0, 515, 1, 20);
+  lv_obj_t *clockTabLabel = lv_label_create(appearancePage);
+  lv_label_set_text(clockTabLabel, "Reloj");
+  lv_obj_set_pos(clockTabLabel, 15, 515);
+  clockTabSwitch = lv_switch_create(appearancePage);
+  lv_obj_set_pos(clockTabSwitch, 190, 504);
+  lv_obj_set_size(clockTabSwitch, 58, 34);
+  lv_obj_add_event_cb(
+    clockTabSwitch,
+    onTabVisibilityChanged,
+    LV_EVENT_VALUE_CHANGED,
+    nullptr
+  );
+
+  appCreateSpacer(appearancePage, 0, 560, 1, 20);
 
   updateAppearanceUi();
   lv_obj_add_flag(appearancePage, LV_OBJ_FLAG_HIDDEN);
+}
+
+void onBrightnessChanged(lv_event_t *event) {
+  if (brightnessSlider == nullptr) return;
+  lv_event_code_t code = lv_event_get_code(event);
+  uint8_t value = (uint8_t)lv_slider_get_value(brightnessSlider);
+
+  if (code == LV_EVENT_VALUE_CHANGED) {
+    if (brightnessValueLabel != nullptr)
+      lv_label_set_text_fmt(brightnessValueLabel, "%u%%", value);
+    AppBacklight::applyBrightness(value); // live preview
+    return;
+  }
+  if (code == LV_EVENT_RELEASED) {
+    AppTheme::setBrightness(value);
+  }
+}
+
+void onDimBrightnessChanged(lv_event_t *event) {
+  if (dimBrightnessSlider == nullptr) return;
+  lv_event_code_t code = lv_event_get_code(event);
+  uint8_t value = (uint8_t)lv_slider_get_value(dimBrightnessSlider);
+
+  if (code == LV_EVENT_VALUE_CHANGED) {
+    if (dimBrightnessValueLabel != nullptr)
+      lv_label_set_text_fmt(dimBrightnessValueLabel, "%u%%", value);
+    return;
+  }
+  if (code == LV_EVENT_RELEASED) {
+    AppTheme::setDimBrightness(value);
+  }
+}
+
+void onDimTimeoutChanged(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED || dimTimeoutDropdown == nullptr) return;
+  uint16_t secs = timeoutIndexToSecs(lv_dropdown_get_selected(dimTimeoutDropdown));
+  AppTheme::setDimTimeoutSecs(secs);
+}
+
+void onClockTimeoutChanged(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED || clockTimeoutDropdown == nullptr) return;
+  uint16_t secs = timeoutIndexToSecs(lv_dropdown_get_selected(clockTimeoutDropdown));
+  AppTheme::setClockTimeoutSecs(secs);
+}
+
+void onPowerOff(lv_event_t *event) {
+  if (lv_event_get_code(event) != LV_EVENT_CLICKED) return;
+  AppBacklight::powerOff();
+}
+
+void createSystemPage() {
+  systemPage = lv_obj_create(categoryLayer);
+  lv_obj_set_pos(systemPage, 0, 40);
+  lv_obj_set_size(systemPage, 480, 232);
+  lv_obj_add_flag(systemPage, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scroll_dir(systemPage, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(systemPage, LV_SCROLLBAR_MODE_ACTIVE);
+  lv_obj_set_style_border_width(systemPage, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_all(systemPage, 0, LV_PART_MAIN);
+  lv_obj_set_style_pad_bottom(systemPage, 20, LV_PART_MAIN);
+
+  // --- Brightness ---
+  lv_obj_t *brightLabel = lv_label_create(systemPage);
+  lv_label_set_text(brightLabel, "Brillo de pantalla");
+  lv_obj_set_pos(brightLabel, 15, 15);
+
+  brightnessValueLabel = lv_label_create(systemPage);
+  lv_obj_set_width(brightnessValueLabel, 55);
+  lv_obj_set_style_text_align(brightnessValueLabel, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+  lv_obj_set_pos(brightnessValueLabel, 400, 15);
+  lv_label_set_text_fmt(brightnessValueLabel, "%u%%", AppTheme::brightness());
+
+  brightnessSlider = lv_slider_create(systemPage);
+  lv_slider_set_range(brightnessSlider, 10, 100);
+  lv_slider_set_value(brightnessSlider, AppTheme::brightness(), LV_ANIM_OFF);
+  lv_obj_set_pos(brightnessSlider, 20, 48);
+  lv_obj_set_size(brightnessSlider, 430, 20);
+  lv_obj_add_event_cb(brightnessSlider, onBrightnessChanged, LV_EVENT_ALL, nullptr);
+
+  // --- Dim on inactivity ---
+  lv_obj_t *dimTimeoutLabel = lv_label_create(systemPage);
+  lv_label_set_text(dimTimeoutLabel, "Atenuar pantalla tras inactividad");
+  lv_obj_set_pos(dimTimeoutLabel, 15, 90);
+
+  dimTimeoutDropdown = lv_dropdown_create(systemPage);
+  lv_dropdown_set_options(dimTimeoutDropdown, TIMEOUT_OPTIONS);
+  lv_dropdown_set_selected(dimTimeoutDropdown, secsToTimeoutIndex(AppTheme::dimTimeoutSecs()));
+  lv_obj_set_pos(dimTimeoutDropdown, 15, 113);
+  lv_obj_set_size(dimTimeoutDropdown, 200, 40);
+  lv_obj_add_event_cb(dimTimeoutDropdown, onDimTimeoutChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  lv_obj_t *dimValLabel = lv_label_create(systemPage);
+  lv_label_set_text(dimValLabel, "Brillo al atenuar");
+  lv_obj_set_pos(dimValLabel, 15, 168);
+
+  dimBrightnessValueLabel = lv_label_create(systemPage);
+  lv_obj_set_width(dimBrightnessValueLabel, 55);
+  lv_obj_set_style_text_align(dimBrightnessValueLabel, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
+  lv_obj_set_pos(dimBrightnessValueLabel, 400, 168);
+  lv_label_set_text_fmt(dimBrightnessValueLabel, "%u%%", AppTheme::dimBrightness());
+
+  dimBrightnessSlider = lv_slider_create(systemPage);
+  lv_slider_set_range(dimBrightnessSlider, 5, 80);
+  lv_slider_set_value(dimBrightnessSlider, AppTheme::dimBrightness(), LV_ANIM_OFF);
+  lv_obj_set_pos(dimBrightnessSlider, 20, 200);
+  lv_obj_set_size(dimBrightnessSlider, 430, 20);
+  lv_obj_add_event_cb(dimBrightnessSlider, onDimBrightnessChanged, LV_EVENT_ALL, nullptr);
+
+  // --- Clock on inactivity ---
+  lv_obj_t *clockTimeoutLabel = lv_label_create(systemPage);
+  lv_label_set_text(clockTimeoutLabel, "Mostrar reloj tras inactividad");
+  lv_obj_set_pos(clockTimeoutLabel, 15, 243);
+
+  clockTimeoutDropdown = lv_dropdown_create(systemPage);
+  lv_dropdown_set_options(clockTimeoutDropdown, TIMEOUT_OPTIONS);
+  lv_dropdown_set_selected(clockTimeoutDropdown, secsToTimeoutIndex(AppTheme::clockTimeoutSecs()));
+  lv_obj_set_pos(clockTimeoutDropdown, 15, 266);
+  lv_obj_set_size(clockTimeoutDropdown, 200, 40);
+  lv_obj_add_event_cb(clockTimeoutDropdown, onClockTimeoutChanged, LV_EVENT_VALUE_CHANGED, nullptr);
+
+  lv_obj_t *clockHint = lv_label_create(systemPage);
+  lv_label_set_text(clockHint, "Activa el tab Reloj en Apariencia para usar esta opcion.");
+  lv_obj_set_width(clockHint, 440);
+  lv_obj_set_pos(clockHint, 15, 316);
+
+  // --- Power off ---
+  appCreateButton(systemPage, "APAGAR SISTEMA", 15, 360, 215, 50, onPowerOff);
+
+  lv_obj_t *powerHint = lv_label_create(systemPage);
+  lv_label_set_text(powerHint, "El sistema entra en modo de bajo consumo.\nUsa el boton fisico de encendido para reiniciar.");
+  lv_obj_set_width(powerHint, 440);
+  lv_obj_set_pos(powerHint, 15, 420);
+
+  appCreateSpacer(systemPage, 0, 480, 1, 20);
+
+  lv_obj_add_flag(systemPage, LV_OBJ_FLAG_HIDDEN);
 }
 
 void createWifiPage() {
@@ -703,6 +894,17 @@ void create(lv_obj_t *parent) {
     );
   }
 #endif
+
+  appCreateButton(
+    parent,
+    "SISTEMA",
+    250,
+    164,
+    215,
+    72,
+    onOpenCategory,
+    reinterpret_cast<void *>(static_cast<intptr_t>(SettingsCategory::SYSTEM))
+  );
 }
 
 void createOverlay() {
@@ -721,6 +923,7 @@ void createOverlay() {
 
   createAppearancePage();
   createWifiPage();
+  createSystemPage();
   lv_obj_add_flag(categoryLayer, LV_OBJ_FLAG_HIDDEN);
 
   createWifiDialog();
@@ -749,6 +952,12 @@ void loop() {
     if (connected) {
       Serial.print("WiFi conectado. IP: ");
       Serial.println(WiFi.localIP());
+      // Sync time via NTP (Spain timezone with automatic DST).
+      configTzTime(
+        "CET-1CEST,M3.5.0,M10.5.0/3",
+        "pool.ntp.org",
+        "time.google.com"
+      );
     }
 #if APP_ENABLE_OCTOPRINT
     OctoPrintFeature::onWifiConnectionChanged(connected);

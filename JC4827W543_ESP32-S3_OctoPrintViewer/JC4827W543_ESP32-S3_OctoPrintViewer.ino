@@ -3,9 +3,11 @@
 #include <Arduino_GFX_Library.h>
 #include <esp_heap_caps.h>
 
+#include "src/core/app_backlight.h"
 #include "src/core/app_config.h"
 #include "src/core/app_navigation.h"
 #include "src/core/app_theme.h"
+#include "src/tabs/clock/tab_clock.h"
 #include "src/tabs/counter/tab_counter.h"
 #include "src/tabs/settings/tab_settings.h"
 
@@ -54,10 +56,16 @@ static lv_obj_t *tabView = nullptr;
 static lv_obj_t *performanceMonitorLabel = nullptr;
 static uint32_t lastPerformanceMonitorSearchMs = 0;
 
-static int8_t counterTabIndex = -1;
-static int8_t domoticaTabIndex = -1;
+static int8_t counterTabIndex   = -1;
+static int8_t domoticaTabIndex  = -1;
 static int8_t octoprintTabIndex = -1;
-static int8_t settingsTabIndex = -1;
+static int8_t clockTabIndex     = -1;
+static int8_t settingsTabIndex  = -1;
+
+// Inactivity state (driven by lv_disp_get_inactive_time)
+static bool inactivityDimmed      = false;
+static bool inactivityClockActive = false;
+static AppPage pageBeforeClock    = AppPage::SETTINGS;
 
 void serviceUi() {
   lv_timer_handler();
@@ -85,6 +93,11 @@ void appShowPage(AppPage page, lv_anim_enable_t animation) {
     case AppPage::OCTOPRINT:
       if (octoprintTabIndex < 0) return;
       target = static_cast<uint8_t>(octoprintTabIndex);
+      break;
+
+    case AppPage::CLOCK:
+      if (clockTabIndex < 0) return;
+      target = static_cast<uint8_t>(clockTabIndex);
       break;
 
     case AppPage::SETTINGS:
@@ -160,19 +173,21 @@ void servicePerformanceMonitorSetting() {
 
 bool isPageAvailable(AppPage page) {
   switch (page) {
-    case AppPage::COUNTER: return counterTabIndex >= 0;
-    case AppPage::DOMOTICA: return domoticaTabIndex >= 0;
+    case AppPage::COUNTER:   return counterTabIndex >= 0;
+    case AppPage::DOMOTICA:  return domoticaTabIndex >= 0;
     case AppPage::OCTOPRINT: return octoprintTabIndex >= 0;
-    case AppPage::SETTINGS: return settingsTabIndex >= 0;
+    case AppPage::CLOCK:     return clockTabIndex >= 0;
+    case AppPage::SETTINGS:  return settingsTabIndex >= 0;
   }
   return false;
 }
 
 // Returns the logical page that corresponds to the currently active tab index.
 AppPage activePageForIndex(int activeIndex) {
-  if (counterTabIndex >= 0 && activeIndex == counterTabIndex) return AppPage::COUNTER;
-  if (domoticaTabIndex >= 0 && activeIndex == domoticaTabIndex) return AppPage::DOMOTICA;
+  if (counterTabIndex   >= 0 && activeIndex == counterTabIndex)   return AppPage::COUNTER;
+  if (domoticaTabIndex  >= 0 && activeIndex == domoticaTabIndex)  return AppPage::DOMOTICA;
   if (octoprintTabIndex >= 0 && activeIndex == octoprintTabIndex) return AppPage::OCTOPRINT;
+  if (clockTabIndex     >= 0 && activeIndex == clockTabIndex)     return AppPage::CLOCK;
   return AppPage::SETTINGS;
 }
 
@@ -193,20 +208,27 @@ AppPage resolveStartupPage() {
 void onTabChanged(lv_event_t *event) {
   if (lv_event_get_code(event) != LV_EVENT_VALUE_CHANGED) return;
 
-  // Saves the active tab (AppTheme ignores Settings and skips redundant writes).
-  AppTheme::setLastActivePage(activePageForIndex(lv_tabview_get_tab_act(tabView)));
+  int activeIndex = static_cast<int>(lv_tabview_get_tab_act(tabView));
+  AppPage activePage = activePageForIndex(activeIndex);
+
+  // Saves the active tab (AppTheme ignores Settings and Clock).
+  AppTheme::setLastActivePage(activePage);
 
 #if APP_ENABLE_OCTOPRINT
   OctoPrintFeature::hideControls();
-  if (lv_tabview_get_tab_act(tabView) == octoprintTabIndex) {
-    OctoPrintFeature::onTabActivated();
-  }
+  if (activeIndex == octoprintTabIndex) OctoPrintFeature::onTabActivated();
 #endif
+
+  if (clockTabIndex >= 0) {
+    if (activeIndex == clockTabIndex) ClockTab::onTabActivated();
+    else                              ClockTab::onTabDeactivated();
+  }
 }
 
 void buildApplicationTabs() {
   if (tabView != nullptr) {
     CounterTab::detachUi();
+    ClockTab::detachUi();
 #if APP_ENABLE_OCTOPRINT
     OctoPrintFeature::detachTabUi();
 #endif
@@ -217,10 +239,11 @@ void buildApplicationTabs() {
     tabView = nullptr;
   }
 
-  counterTabIndex = -1;
-  domoticaTabIndex = -1;
+  counterTabIndex   = -1;
+  domoticaTabIndex  = -1;
   octoprintTabIndex = -1;
-  settingsTabIndex = -1;
+  clockTabIndex     = -1;
+  settingsTabIndex  = -1;
 
   tabView = lv_tabview_create(
     lv_scr_act(),
@@ -255,6 +278,12 @@ void buildApplicationTabs() {
     OctoPrintTab::create(octoprintTab);
   }
 #endif
+
+  if (AppTheme::showClockTab()) {
+    clockTabIndex = static_cast<int8_t>(nextIndex++);
+    lv_obj_t *clockTab = lv_tabview_add_tab(tabView, "Reloj");
+    ClockTab::create(clockTab);
+  }
 
   settingsTabIndex = static_cast<int8_t>(nextIndex++);
   lv_obj_t *settingsTab = lv_tabview_add_tab(tabView, "Ajustes");
@@ -384,10 +413,11 @@ void setup() {
   }
 
   gfx->fillScreen(RGB565_BLACK);
-  pinMode(GFX_BL, OUTPUT);
-  digitalWrite(GFX_BL, HIGH);
 
   if (!initializeLvgl()) return;
+
+  // AppBacklight::begin() must come after AppTheme::begin() (called inside initializeLvgl).
+  AppBacklight::begin();
 
 #if APP_ENABLE_OCTOPRINT
   if (!OctoPrintFeature::begin()) {
@@ -412,9 +442,42 @@ void setup() {
   Serial.println("Setup terminado");
 }
 
+void handleInactivity() {
+  uint32_t inactiveMs = lv_disp_get_inactive_time(nullptr);
+
+  // Dim backlight after configured idle time.
+  uint32_t dimSecs = AppTheme::dimTimeoutSecs();
+  if (dimSecs > 0 && inactiveMs >= dimSecs * 1000u) {
+    if (!inactivityDimmed) { inactivityDimmed = true; AppBacklight::dim(); }
+  } else if (inactivityDimmed) {
+    inactivityDimmed = false;
+    AppBacklight::restore();
+  }
+
+  // Switch to clock tab after configured idle time (requires clock tab to be visible).
+  uint32_t clockSecs = AppTheme::clockTimeoutSecs();
+  if (clockSecs > 0 && clockTabIndex >= 0 && inactiveMs >= clockSecs * 1000u) {
+    if (!inactivityClockActive) {
+      inactivityClockActive = true;
+      if (tabView != nullptr)
+        pageBeforeClock = activePageForIndex(lv_tabview_get_tab_act(tabView));
+      appShowPage(AppPage::CLOCK, LV_ANIM_OFF);
+      appPreviewTabBarHeight(0); // fullscreen — no 5 s delay
+      ClockTab::setInactivityMode(true);
+    }
+  } else if (inactivityClockActive) {
+    // Activity detected: restore previous tab and tabbar.
+    inactivityClockActive = false;
+    ClockTab::setInactivityMode(false);
+    appPreviewTabBarHeight(AppTheme::tabBarHeight());
+    appShowPage(pageBeforeClock, LV_ANIM_OFF);
+  }
+}
+
 void loop() {
   serviceUi();
   servicePerformanceMonitorSetting();
+  handleInactivity();
   SettingsTab::loop();
 
 #if APP_ENABLE_DOMOTICA
