@@ -9,6 +9,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
+#include <string.h>
 
 #include "../features/domotica_config.h"
 
@@ -32,31 +33,85 @@ bool isValidIndex(uint8_t index) {
 
 Result executeRequest(uint8_t index) {
   Result result = {index, false, 0};
-  if (!isValidIndex(index) || WiFi.status() != WL_CONNECTED) return result;
+
+  if (!isValidIndex(index) || WiFi.status() != WL_CONNECTED) {
+    return result;
+  }
 
   const char *url = DOMOTICA_WEBHOOKS[index].url;
-  if (url == nullptr || url[0] == '\0') return result;
 
-  WiFiClientSecure client;
-  client.setInsecure();
+  if (url == nullptr || url[0] == '\0') {
+    return result;
+  }
 
   HTTPClient http;
   http.setConnectTimeout(5000);
   http.setTimeout(8000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-  if (!http.begin(client, url)) return result;
+  /*
+   * Los webhooks públicos actuales usan HTTPS + GET.
+   * Los webhooks locales de Home Assistant usan HTTP + POST.
+   */
+  if (strncmp(url, "https://", 8) == 0) {
+    WiFiClientSecure client;
+    client.setInsecure();
 
-  result.httpCode = http.GET();
-  result.success = result.httpCode >= 200 && result.httpCode < 300;
-  http.end();
+    if (!http.begin(client, url)) {
+      Serial.printf(
+        "Webhook '%s': no se pudo iniciar HTTPS\n",
+        DOMOTICA_WEBHOOKS[index].title
+      );
+      return result;
+    }
 
-  // Solo se muestra el titulo. La URL y sus tokens nunca se imprimen.
-  Serial.printf(
-    "Webhook '%s': HTTP %d\n",
-    DOMOTICA_WEBHOOKS[index].title,
-    result.httpCode
-  );
+    result.httpCode = http.GET();
+    http.end();
+  }
+  else if (strncmp(url, "http://", 7) == 0) {
+    WiFiClient client;
+
+    if (!http.begin(client, url)) {
+      Serial.printf(
+        "Webhook '%s': no se pudo iniciar HTTP\n",
+        DOMOTICA_WEBHOOKS[index].title
+      );
+      return result;
+    }
+
+    // Home Assistant: petición POST con un JSON vacío válido.
+    http.addHeader("Content-Type", "application/json");
+    result.httpCode = http.POST("{}");
+    http.end();
+  }
+  else {
+    Serial.printf(
+      "Webhook '%s': protocolo no compatible\n",
+      DOMOTICA_WEBHOOKS[index].title
+    );
+    return result;
+  }
+
+  result.success =
+    result.httpCode >= 200 &&
+    result.httpCode < 300;
+
+  // Solo se muestra el título. La URL y sus tokens nunca se imprimen.
+  if (result.httpCode > 0) {
+    Serial.printf(
+      "Webhook '%s': HTTP %d\n",
+      DOMOTICA_WEBHOOKS[index].title,
+      result.httpCode
+    );
+  } else {
+    Serial.printf(
+      "Webhook '%s': HTTP %d (%s)\n",
+      DOMOTICA_WEBHOOKS[index].title,
+      result.httpCode,
+      HTTPClient::errorToString(result.httpCode).c_str()
+    );
+  }
+
   return result;
 }
 
